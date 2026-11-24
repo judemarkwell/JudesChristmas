@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Jude's Christmas Wishlist</title>
+  <meta name="description" content="Jude's Christmas wishlist: browse, claim a gift, and keep it a surprise.">
+  <meta name="theme-color" content="#b3202a">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎄</text></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Mountains+of+Christmas:wght@700&family=Nunito:wght@400;600;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <div class="snow" id="snow" aria-hidden="true"></div>
+
+  <header class="site-header">
+    <div class="header-inner">
+      <a href="#catalog" class="brand">
+        <span class="brand-icon" aria-hidden="true">🎄</span>
+        <span class="brand-text">Jude's Wishlist</span>
+      </a>
+      <button id="mode-btn" class="mode-pill" type="button"></button>
+    </div>
+    <div class="lights" aria-hidden="true"></div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <h1>Jude's Christmas List</h1>
+      <p class="tagline">Peek at the wishes, claim a gift, and help keep the surprise a surprise.</p>
+      <div class="countdown" id="countdown"></div>
+    </section>
+
+    <nav class="tabs" aria-label="Sections">
+      <a href="#catalog" class="tab" data-view="catalog"><span class="tab-icon" aria-hidden="true">🎁</span><span>Catalog</span></a>
+      <a href="#shop" class="tab" data-view="shop"><span class="tab-icon" aria-hidden="true">🧝</span><span>Elf Shop</span></a>
+      <a href="#memories" class="tab" data-view="memories"><span class="tab-icon" aria-hidden="true">📸</span><span>Memories</span></a>
+    </nav>
+
+    <div id="view" class="view" aria-live="polite">
+      <p class="loading">Warming up the sleigh…</p>
+    </div>
+  </main>
+
+  <footer class="site-footer">
+    <p id="storage-note"></p>
+    <p class="muted">Made with cocoa and code ☕</p>
+  </footer>
+
+  <dialog id="modal" class="modal">
+    <button class="modal-close" type="button" data-close aria-label="Close">✕</button>
+    <div class="modal-body"></div>
+  </dialog>
+
+  <div id="toast" class="toast" role="status"></div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

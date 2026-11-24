@@ -1,0 +1,235 @@
+{
+  "_help": "Edit this file to change the wishlist. Fields: id (unique, never change once claimed), name, category, emoji, url, priority (1-3), note, price (optional number), details (optional list), alternatives (optional list of {name, note, query}).",
+  "items": [
+    {
+      "id": "charging-station",
+      "name": "Retractable Charging Station",
+      "category": "Desk & Tech",
+      "emoji": "🔌",
+      "url": "https://www.amazon.com/dp/B0F4QRX9PB",
+      "priority": 2,
+      "note": "Gitryin desktop charging station with retractable USB-C cables and surge protection. Clears up desk clutter.",
+      "alternatives": [
+        { "name": "Anker power strip with USB-C", "note": "Fewer bells and whistles, still surge protected.", "query": "Anker power strip USB-C surge protector" },
+        { "name": "Gitryin 10-in-1 (smaller version)", "note": "Same brand, fewer outlets.", "query": "Gitryin 10-in-1 desktop charging station" }
+      ]
+    },
+    {
+      "id": "basilisk-v3-pro",
+      "name": "Razer Basilisk V3 Pro Wireless",
+      "category": "Desk & Tech",
+      "emoji": "🖱️",
+      "url": "https://www.amazon.com/dp/B0B6Y3XYFG",
+      "priority": 3,
+      "note": "Wireless gaming mouse for the PC.",
+      "alternatives": [
+        { "name": "Razer Basilisk V3 X HyperSpeed", "note": "Cheaper wireless version of the same shape.", "query": "Razer Basilisk V3 X HyperSpeed" },
+        { "name": "Logitech G502 X Lightspeed", "note": "Similar style of mouse from Logitech.", "query": "Logitech G502 X Lightspeed wireless" }
+      ]
+    },
+    {
+      "id": "pc-caster-base",
+      "name": "PC Caster Base",
+      "category": "Desk & Tech",
+      "emoji": "🛞",
+      "url": "https://www.amazon.com/dp/B0DHZTNS8Y",
+      "priority": 2,
+      "note": "Adjustable, ventilated stand with locking wheels so the PC can live under the desk.",
+      "alternatives": [
+        { "name": "Basic rolling PC stand", "note": "Any adjustable stand with locking casters works.", "query": "adjustable rolling computer tower stand locking casters" }
+      ]
+    },
+    {
+      "id": "rolling-file-cabinet",
+      "name": "Rolling File Cabinet",
+      "category": "Desk & Tech",
+      "emoji": "🗄️",
+      "url": "https://www.amazon.com/dp/B0DBZ98D94",
+      "priority": 2,
+      "note": "Rolls under the desk to hold the laptop dock and other stuff.",
+      "details": ["Needs to fit under the desk at its lowest height"],
+      "alternatives": [
+        { "name": "IKEA RÅSKOG utility cart", "note": "Slim 3-tier rolling cart.", "query": "IKEA RASKOG utility cart" },
+        { "name": "Drawer unit on casters", "note": "Any low drawer unit with wheels.", "query": "under desk rolling drawer unit" }
+      ]
+    },
+    {
+      "id": "razor-refills",
+      "name": "Harry's Razor Blade Refills",
+      "category": "Everyday",
+      "emoji": "🪒",
+      "url": "https://www.amazon.com/dp/B09SGK9FWZ",
+      "priority": 1,
+      "note": "Refill cartridges for my Harry's razor.",
+      "alternatives": [
+        { "name": "Harry's refills at Target or Walmart", "note": "Sometimes cheaper in stores.", "query": "Harry's razor blade refills" }
+      ]
+    },
+    {
+      "id": "shave-gel",
+      "name": "Harry's Shave Gel",
+      "category": "Everyday",
+      "emoji": "🧴",
+      "url": "https://www.amazon.com/dp/B07SKCJFZP",
+      "priority": 1,
+      "note": "Goes with the razor refills."
+    },
+    {
+      "id": "pb-overgrips",
+      "name": "Doughy Grips Pickleball Overgrip",
+      "category": "Pickleball",
+      "emoji": "🤲",
+      "url": "https://shop.com/products/8199032406199/doughy-grips-soft-and-tacky-pickleball-overgrip",
+      "priority": 2,
+      "note": "Soft, tacky overgrips for the paddle.",
+      "alternatives": [
+        { "name": "Tourna Grip or Wilson Pro overgrip", "note": "Classic overgrips that also fit pickleball paddles.", "query": "pickleball overgrip pack" }
+      ]
+    },
+    {
+      "id": "pickleballs",
+      "name": "Franklin X-40 Outdoor Pickleballs",
+      "category": "Pickleball",
+      "emoji": "🟡",
+      "url": "https://www.amazon.com/dp/B074P8MZW9",
+      "priority": 2,
+      "note": "Outdoor balls crack quickly, so a bigger pack lasts longer."
+    },
+    {
+      "id": "pb-backpack",
+      "name": "Pickleball Backpack",
+      "category": "Pickleball",
+      "emoji": "🎒",
+      "url": "https://www.amazon.com/dp/B0FWR75LMG",
+      "priority": 2,
+      "note": "To carry paddles, balls and shoes to the courts.",
+      "alternatives": [
+        { "name": "Other pickleball backpacks", "note": "Look for a paddle sleeve and a shoe compartment.", "query": "pickleball backpack paddle sleeve shoe compartment" }
+      ]
+    },
+    {
+      "id": "pb-shoes",
+      "name": "ASICS Gel-Dedicate Pickleball Shoes",
+      "category": "Pickleball",
+      "emoji": "👟",
+      "url": "https://www.amazon.com/dp/B0GZRJHLDQ",
+      "priority": 3,
+      "note": "Court shoes for pickleball.",
+      "details": ["Men's, ask Jude's family for the size"],
+      "alternatives": [
+        { "name": "Previous Gel-Dedicate model", "note": "Last year's version is often discounted.", "query": "ASICS Gel-Dedicate 8 pickleball men's" }
+      ]
+    },
+    {
+      "id": "blackshark-headset",
+      "name": "Razer BlackShark Wireless Headset",
+      "category": "Desk & Tech",
+      "emoji": "🎧",
+      "url": "https://www.amazon.com/dp/B0FH5YWH7B",
+      "priority": 3,
+      "note": "Wireless gaming headset for the PC.",
+      "alternatives": [
+        { "name": "Razer BlackShark V2 HyperSpeed", "note": "Older model, usually cheaper.", "query": "Razer BlackShark V2 HyperSpeed wireless" },
+        { "name": "Turtle Beach Atlas Air", "note": "Open-back wireless, lets you hear the room.", "query": "Turtle Beach Atlas Air wireless" }
+      ]
+    },
+    {
+      "id": "pb-paddle",
+      "name": "Vatic Pro Prism Flash 16mm Paddle",
+      "category": "Pickleball",
+      "emoji": "🏓",
+      "url": "https://www.amazon.com/dp/B0BYMGYVTR",
+      "priority": 3,
+      "note": "Raw carbon fiber paddle with foam-injected edges. Get the 16mm.",
+      "details": ["16mm core"],
+      "alternatives": [
+        { "name": "11SIX24 Pegasus Jelly Bean", "note": "Control paddle, often under $100.", "query": "11SIX24 Pegasus Jelly Bean paddle" },
+        { "name": "Warping Point Neon", "note": "Touch-focused paddle around $100.", "query": "Warping Point Neon pickleball paddle" }
+      ]
+    },
+    {
+      "id": "chess-pieces",
+      "name": "Staunton Tournament Chess Pieces",
+      "category": "Chess",
+      "emoji": "♟️",
+      "url": "https://www.amazon.com/dp/B000N33HWM",
+      "priority": 2,
+      "note": "Triple-weighted tournament pieces."
+    },
+    {
+      "id": "chess-mat",
+      "name": "Rollable Tournament Chess Mat",
+      "category": "Chess",
+      "emoji": "♜",
+      "url": "https://www.amazon.com/dp/B0G2LYXGHY",
+      "priority": 2,
+      "note": "Leather roll-up board that goes with the tournament pieces.",
+      "alternatives": [
+        { "name": "Vinyl tournament chess mat", "note": "The standard club mat, very cheap.", "query": "vinyl tournament chess mat 20 inch" }
+      ]
+    },
+    {
+      "id": "pb-edge-guard",
+      "name": "Bodhi Guard Edge Tape",
+      "category": "Pickleball",
+      "emoji": "🛡️",
+      "url": "https://bodhiperformance.com/products/bodhi-guard-premium-edge-tape-patterns",
+      "priority": 1,
+      "note": "Edge tape to protect the new paddle.",
+      "alternatives": [
+        { "name": "Generic paddle edge guard tape", "note": "Plain colors, lower price.", "query": "pickleball paddle edge guard tape" }
+      ]
+    },
+    {
+      "id": "car-air-freshener",
+      "name": "Little Trees Car Air Freshener",
+      "category": "Car",
+      "emoji": "🌲",
+      "url": "https://www.amazon.com/dp/B083FVT991",
+      "priority": 1,
+      "note": "Stocking stuffer for the new car."
+    },
+    {
+      "id": "car-trash-can",
+      "name": "EPAuto Car Trash Can",
+      "category": "Car",
+      "emoji": "🗑️",
+      "url": "https://www.amazon.com/dp/B07HYJ2YHN",
+      "priority": 1,
+      "note": "Leakproof trash can with storage pockets."
+    },
+    {
+      "id": "charging-cables",
+      "name": "Anker USB-C Charging Cables (2-pack)",
+      "category": "Desk & Tech",
+      "emoji": "🔋",
+      "url": "https://www.amazon.com/dp/B0CCRNJ7Y4",
+      "priority": 1,
+      "note": "Braided USB-C cables.",
+      "alternatives": [
+        { "name": "UGREEN braided USB-C cables", "note": "Similar quality, often cheaper.", "query": "UGREEN braided USB-C cable 100W 2 pack" }
+      ]
+    },
+    {
+      "id": "anker-charger",
+      "name": "Anker Fast Charger",
+      "category": "Desk & Tech",
+      "emoji": "⚡",
+      "url": "https://www.amazon.com/dp/B0HFS422TJ",
+      "priority": 2,
+      "note": "Fast USB-C charger with a display. Anything 40W or more charges an iPhone 17 at full speed."
+    },
+    {
+      "id": "car-charger",
+      "name": "Fast Car Charger",
+      "category": "Car",
+      "emoji": "🚗",
+      "url": "https://www.amazon.com/dp/B0C53MKFMY",
+      "priority": 2,
+      "note": "USB-C fast charger for the car's lighter socket.",
+      "alternatives": [
+        { "name": "Anker USB-C car charger", "note": "Brand-name option.", "query": "Anker USB-C car charger fast" }
+      ]
+    }
+  ]
+}
