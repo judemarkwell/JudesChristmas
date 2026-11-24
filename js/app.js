@@ -113,6 +113,30 @@ function openModal(html, { wide = false } = {}) {
   if (first) first.focus({ preventScroll: true });
 }
 function closeModal() { if (modal.open) modal.close(); }
+
+// In-page confirm step (browser confirm() is blocked in some embedded viewers).
+function askConfirm(title, text, okLabel) {
+  return new Promise((resolve) => {
+    openModal(`
+      <h2>${esc(title)}</h2>
+      <p>${esc(text)}</p>
+      <div class="form-actions">
+        <button type="button" class="btn btn-ghost" id="cf-no">Cancel</button>
+        <button type="button" class="btn btn-danger" id="cf-yes">${esc(okLabel)}</button>
+      </div>`);
+    let done = false;
+    const finish = (v) => {
+      if (done) return;
+      done = true;
+      modal.removeEventListener('close', onClose);
+      resolve(v);
+    };
+    const onClose = () => finish(false);
+    modal.addEventListener('close', onClose);
+    $('#cf-yes').addEventListener('click', () => finish(true));
+    $('#cf-no').addEventListener('click', () => { finish(false); closeModal(); });
+  });
+}
 modal.addEventListener('click', (e) => {
   if (e.target === modal || e.target.closest('[data-close]')) closeModal();
 });
@@ -383,7 +407,7 @@ function openItemEditor(existing) {
   });
 
   $('#delete-item')?.addEventListener('click', async () => {
-    if (!confirm(`Remove "${existing.name}" from your list? If someone already claimed it, they'll see it was removed.`)) return;
+    if (!(await askConfirm('Remove this wish?', `"${existing.name}" will come off your list. If someone already claimed it, they'll see it was removed.`, 'Remove'))) return;
     state.items = await state.store.deleteItem(existing.id, state.items);
     closeModal();
     toast('🗑️ Removed from your list');
@@ -482,7 +506,7 @@ function openManage(item) {
     toast('✅ Saved');
   });
   $('#unclaim-btn').addEventListener('click', async () => {
-    if (!confirm(`Release "${item.name}" so another elf can claim it?`)) return;
+    if (!(await askConfirm('Release this gift?', `"${item.name}" goes back on the list so another elf can claim it.`, 'Release'))) return;
     await state.store.unclaim(item.id);
     closeModal();
     toast('🎈 Released back to the list');
@@ -836,7 +860,7 @@ function openLightbox(m) {
     </figure>
     ${deletable ? `<div class="form-actions"><button type="button" class="btn btn-danger small" id="del-memory">Delete photo</button></div>` : ''}`, { wide: true });
   $('#del-memory')?.addEventListener('click', async () => {
-    if (!confirm('Delete this memory? This can’t be undone.')) return;
+    if (!(await askConfirm('Delete this memory?', 'This photo will be removed for good.', 'Delete'))) return;
     await state.store.deleteMemory(m.id);
     await refreshMemories();
     closeModal();
