@@ -495,26 +495,31 @@ main { position: relative; z-index: 1; max-width: 1100px; margin: 0 auto; paddin
 }
 @media (hover: hover) and (pointer: fine) { .modal-close:hover { background: var(--line); } }
 
-/* Phones: a top-anchored sheet sized to the visible area, so the keyboard never covers
-   the field being typed in, and the action buttons stay pinned at the bottom of the sheet. */
+/* Phones: a top-anchored sheet. Cancel/Save sit in a bar pinned to the top of the sheet,
+   like an iOS sheet, so they stay visible while the keyboard is open. The field being typed
+   in scrolls up just under that bar (see app.js), out of the keyboard's reach. */
 @media (max-width: 600px) {
   .modal, .modal.modal-wide {
     width: calc(100vw - 1rem);
     margin: calc(var(--vvtop, 0px) + 0.5rem) auto auto;
     max-height: calc(var(--vvh, 100dvh) - 1rem);
-    padding: 1.3rem 1rem 0;
+    padding: 1.3rem 1rem 1rem;
   }
-  .modal .form { padding-bottom: 0; }
-  .modal .form-actions {
+  .modal .form { display: flex; flex-direction: column; }
+  .modal .form > * { flex: none; }
+  .modal .form .form-actions {
+    order: -1;
     position: sticky;
-    bottom: 0;
-    z-index: 1;
-    margin: 0 -1rem;
-    padding: 0.75rem 1rem calc(0.75rem + env(safe-area-inset-bottom));
+    top: -1.3rem;
+    z-index: 2;
+    margin: -0.25rem -1rem 0;
+    padding: 0.6rem 1rem;
     background: var(--paper);
-    border-top: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
   }
-  .modal-body > :last-child:not(.form):not(.form-actions) { margin-bottom: 1rem; }
+  .modal .form .form-actions .btn { min-height: 44px; }
+  .modal .form input, .modal .form textarea { scroll-margin-top: 5.5rem; }
+  .modal.typing .form { padding-bottom: 65vh; }
 }
 
 /* ===== Forms ===== */

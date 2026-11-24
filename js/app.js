@@ -104,13 +104,16 @@ const currentView = () => {
 const isOwnerView = () => !state.elf;
 
 // ---------- modal & toast ----------
+const isPhone = () => matchMedia('(max-width: 600px)').matches;
 const modal = $('#modal');
 function openModal(html, { wide = false } = {}) {
   $('.modal-body', modal).innerHTML = html;
   modal.classList.toggle('modal-wide', wide);
   if (!modal.open) modal.showModal();
+  modal.scrollTop = 0;
+  // On phones, don't pop the keyboard up before the person has tapped a field.
   const first = modal.querySelector('input:not([type=radio]):not([type=checkbox]), select, textarea');
-  if (first) first.focus({ preventScroll: true });
+  if (first && !isPhone()) first.focus({ preventScroll: true });
 }
 function closeModal() { if (modal.open) modal.close(); }
 
@@ -155,12 +158,26 @@ if (window.visualViewport) {
   visualViewport.addEventListener('scroll', fitToVisibleArea);
   fitToVisibleArea();
 }
+// Some viewers (an iPhone, or a page embedded in an app) never tell the page the keyboard
+// is open. So on phones, the field being typed in is moved to the top of the sheet, just
+// under the pinned Cancel/Save bar, where the keyboard can't reach it. Extra room is added
+// below the last field while typing so even the bottom fields can scroll up that far.
+let typingTimer;
 modal.addEventListener('focusin', (e) => {
   const field = e.target.closest('input, textarea, select');
-  if (!field || ['radio', 'checkbox', 'file'].includes(field.type)) return;
-  // Wait for the keyboard to finish opening before measuring.
-  setTimeout(() => field.scrollIntoView({ block: 'center', behavior: 'smooth' }), 320);
+  if (!field || ['radio', 'checkbox', 'file'].includes(field.type) || !isPhone()) return;
+  clearTimeout(typingTimer);
+  modal.classList.add('typing');
+  const lift = () => field.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  requestAnimationFrame(lift);
+  setTimeout(lift, 350); // again once the keyboard has finished opening
 });
+modal.addEventListener('focusout', () => {
+  typingTimer = setTimeout(() => {
+    if (!modal.contains(document.activeElement)) modal.classList.remove('typing');
+  }, 200);
+});
+modal.addEventListener('close', () => modal.classList.remove('typing'));
 
 let toastTimer;
 function toast(msg) {

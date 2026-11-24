@@ -74,7 +74,7 @@ The page has to be served (not opened as a file) so it can load the JSON files.
 
 ## Phone check
 
-Run this before pushing UI changes. It opens every screen and form at phone sizes, simulates the on-screen keyboard, and fails if a field or the Save button is hidden, a tap target is under 44px, the page scrolls sideways, or there's a script error.
+Run this before pushing UI changes. It opens every screen and form at phone sizes, simulates the on-screen keyboard both the Android way (page shrinks) and the iPhone or in-app way (keyboard covers the page), and fails if a field or the Save button is hidden, a tap target is under 44px, the page scrolls sideways, or there's a script error.
 
 ```bash
 pip install playwright && playwright install chromium

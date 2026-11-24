@@ -7,9 +7,11 @@ Opens every screen and form at phone sizes and reports problems people hit on a 
   - overflow: the page is wider than the screen (sideways scrolling)
   - errors: JavaScript errors
 
-The keyboard is simulated by shrinking the viewport the way Android Chrome does
-(interactive-widget=resizes-content). iOS Safari behaves a bit differently, so still give
-new forms a quick look on a real iPhone.
+The keyboard is simulated two ways:
+  - resizing:  the page shrinks when the keyboard opens (Android Chrome)
+  - overlay:   the page keeps its size and the keyboard covers the bottom of the screen
+               (iPhones, and pages embedded in an app such as the Claude preview)
+A field or button counts as hidden if it ends up under the keyboard in either mode.
 
 Usage:  pip install playwright && playwright install chromium
         python3 tests/mobile_check.py            # exits 1 if anything fails
@@ -51,11 +53,11 @@ TAP_TARGETS = """
 """
 
 VISIBLE = """
-(el) => {
+(el, keyboard) => {
   const r = el.getBoundingClientRect();
   const vv = window.visualViewport;
   const top = vv ? vv.offsetTop : 0;
-  const bottom = top + (vv ? vv.height : innerHeight);
+  const bottom = top + (vv ? vv.height : innerHeight) - keyboard;
   // Hidden if outside the visible area or sitting under a sticky element.
   const inView = r.top >= top - 1 && r.bottom <= bottom + 1;
   const x = r.left + r.width / 2, y = Math.min(r.top + r.height / 2, bottom - 2);
@@ -97,18 +99,25 @@ def check(page, phone, w, h, problems):
         page.wait_for_selector(form)
         fields = page.locator(f'{form} input:not([type=radio]):not([type=checkbox]):not([type=file]), {form} textarea')
         submit = page.locator(f'{form} [type=submit]')
-        for i in range(fields.count()):
-            field = fields.nth(i)
-            label = field.get_attribute('name') or f'field {i + 1}'
+        for mode in ('resizing', 'overlay'):
+            for i in range(fields.count()):
+                field = fields.nth(i)
+                label = field.get_attribute('name') or f'field {i + 1}'
+                page.set_viewport_size({'width': w, 'height': h})
+                page.wait_for_timeout(150)
+                field.focus()
+                if mode == 'resizing':
+                    page.set_viewport_size({'width': w, 'height': h - KEYBOARD})
+                    covered = 0
+                else:
+                    covered = KEYBOARD
+                page.wait_for_timeout(800)
+                if not field.evaluate(VISIBLE, covered):
+                    fail('keyboard', f'{name} ({mode})', f"'{label}' is hidden behind the keyboard")
+                if submit.count() and not submit.first.evaluate(VISIBLE, covered):
+                    fail('keyboard', f'{name} ({mode})', f"main button is hidden while typing in '{label}'")
+            page.evaluate('document.activeElement && document.activeElement.blur()')
             page.set_viewport_size({'width': w, 'height': h})
-            page.wait_for_timeout(150)
-            field.focus()
-            page.set_viewport_size({'width': w, 'height': h - KEYBOARD})  # keyboard opens
-            page.wait_for_timeout(700)
-            if not field.evaluate(VISIBLE):
-                fail('keyboard', name, f"'{label}' is hidden behind the keyboard")
-            if submit.count() and not submit.first.evaluate(VISIBLE):
-                fail('keyboard', name, f"main button is hidden while typing in '{label}'")
         for t in page.evaluate(TAP_TARGETS):
             fail('tap-size', name, f"'{t['name']}' is {t['h']}px tall")
         page.keyboard.press('Escape')
