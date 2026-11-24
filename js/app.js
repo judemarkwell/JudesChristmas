@@ -22,8 +22,9 @@ const ls = {
   del(k) { try { localStorage.removeItem(k); } catch { /* private mode */ } },
 };
 const shopSearch = (q) => `https://www.google.com/search?tbm=shop&q=${encodeURIComponent(q)}`;
-const asinOf = (url) => (String(url).match(/\/dp\/([A-Z0-9]{10})/i) || [])[1];
+const asinOf = (url) => (String(url).match(/\/(?:dp|gp\/product|gp\/aw\/d)\/([A-Z0-9]{10})/i) || [])[1];
 const sameName = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+const slug = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'wish';
 
 async function sha256(text) {
   const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
@@ -41,10 +42,51 @@ async function loadJSON(path, fallback) {
   }
 }
 
+// Turns a pasted shopping link into a short link plus a best-guess title.
+// Amazon links carry the product name in the path ("Razer-Basilisk-Wireless-Gaming").
+function readLink(raw) {
+  let url;
+  try { url = new URL(raw.trim().startsWith('http') ? raw.trim() : `https://${raw.trim()}`); } catch { return null; }
+  const asin = asinOf(url.href);
+  const isAmazon = /(^|\.)amazon\./i.test(url.hostname);
+  let title = '';
+  if (isAmazon) {
+    const parts = url.pathname.split('/').filter(Boolean);
+    const dpAt = parts.findIndex((p) => p === 'dp');
+    const words = dpAt > 0 ? parts[dpAt - 1] : '';
+    if (words && !/^(gp|dp)$/i.test(words)) title = words.replace(/-/g, ' ');
+  } else {
+    const last = url.pathname.split('/').filter(Boolean).pop() || '';
+    if (/[a-z]-[a-z]/i.test(last)) title = last.replace(/\.[a-z]+$/i, '').replace(/[-_]+/g, ' ');
+  }
+  title = title.replace(/\b\w/g, (c) => c.toUpperCase()).trim();
+  const clean = isAmazon && asin ? `https://www.amazon.com/dp/${asin}` : `${url.origin}${url.pathname}`;
+  return { url: clean, title, store: url.hostname.replace(/^www\./, '') };
+}
+
+const ICONS = ['🎁', '🖱️', '⌨️', '🎧', '🖥️', '💻', '📱', '🔌', '🔋', '⚡', '🎮', '📚',
+  '👟', '👕', '🧥', '🧢', '🧦', '⌚', '💍', '🕶️', '🎒', '🧴', '🪒', '🛁',
+  '🏓', '🟡', '⚾', '🏀', '⛳', '🚴', '♟️', '🎲', '🧩', '🎨', '🎸', '📷',
+  '☕', '🍫', '🍪', '🕯️', '🌲', '🚗', '🔧', '🛞', '🗄️', '🛋️', '🪴', '🧸'];
+
+const SIZE_FIELDS = [
+  ['shirt', 'Shirt'], ['hoodie', 'Hoodie / jacket'], ['pants', 'Pants'],
+  ['shoe', 'Shoe'], ['ring', 'Ring'], ['hat', 'Hat'],
+];
+const FAVORITE_FIELDS = [
+  ['colors', 'Colors', 'e.g. forest green, black'],
+  ['brands', 'Brands', 'e.g. Razer, ASICS'],
+  ['stores', 'Stores', 'e.g. Target, REI'],
+  ['treats', 'Snacks & treats', 'e.g. dark chocolate'],
+];
+const PAYBACK_FIELDS = [['venmo', 'Venmo', '@username'], ['paypal', 'PayPal', 'email or link'], ['cashapp', 'Cash App', '$cashtag']];
+
 // ---------- state ----------
 const state = {
   store: null,
   items: [],
+  seedItems: [],
+  profile: {},
   claims: {},
   staticMemories: [],
   savedMemories: [],
@@ -53,19 +95,22 @@ const state = {
   elfName: ls.get('jc.elfName') || '',
 };
 
+const VIEWS = ['catalog', 'profile', 'shop', 'memories'];
 const view = () => $('#view');
 const currentView = () => {
   const v = location.hash.replace('#', '');
-  return ['catalog', 'shop', 'memories'].includes(v) ? v : 'catalog';
+  return VIEWS.includes(v) ? v : 'catalog';
 };
+const isOwnerView = () => !state.elf;
 
 // ---------- modal & toast ----------
 const modal = $('#modal');
-function openModal(html) {
+function openModal(html, { wide = false } = {}) {
   $('.modal-body', modal).innerHTML = html;
+  modal.classList.toggle('modal-wide', wide);
   if (!modal.open) modal.showModal();
-  const first = modal.querySelector('input, select, textarea');
-  if (first) first.focus();
+  const first = modal.querySelector('input:not([type=radio]):not([type=checkbox]), select, textarea');
+  if (first) first.focus({ preventScroll: true });
 }
 function closeModal() { if (modal.open) modal.close(); }
 modal.addEventListener('click', (e) => {
@@ -92,6 +137,7 @@ function render() {
   document.body.classList.toggle('elf-mode', state.elf);
   renderModeButton();
   if (v === 'catalog') renderCatalog();
+  else if (v === 'profile') renderProfile();
   else if (v === 'shop') renderShop();
   else renderMemories();
 }
@@ -107,36 +153,42 @@ function renderModeButton() {
 function renderStorageNote() {
   $('#storage-note').innerHTML = state.store?.mode === 'firebase'
     ? '🌟 Claims sync live for the whole family.'
-    : '🧪 Demo mode: claims are only saved on this device until the shared database is connected.';
+    : '🧪 Demo mode: everything is saved only on this device until the shared database is connected.';
 }
 
-// ----- catalog -----
+// ----- wishlist -----
 function renderCatalog() {
-  const cats = ['All', ...new Set(state.items.map((i) => i.category))];
+  const cats = ['All', ...new Set(state.items.map((i) => i.category).filter(Boolean))];
   const f = state.filter;
+  if (!cats.includes(f.cat)) f.cat = 'All';
   view().innerHTML = `
     <div class="toolbar">
-      <div class="chips" role="group" aria-label="Filter by category">
-        ${cats.map((c) => `<button type="button" class="chip ${c === f.cat ? 'active' : ''}" data-cat="${esc(c)}">${esc(c)}</button>`).join('')}
-      </div>
       <div class="toolbar-row">
         <input id="search" class="search" type="search" placeholder="Search the list…" value="${esc(f.q)}" aria-label="Search the list">
+        ${isOwnerView() ? `<button type="button" class="btn btn-primary" id="add-wish">＋ Add a wish</button>` : ''}
         ${state.elf ? `
           <label class="switch">
             <input type="checkbox" id="hide-claimed" ${f.hideClaimed ? 'checked' : ''}>
             <span class="switch-track" aria-hidden="true"></span> Hide claimed
           </label>` : ''}
       </div>
+      <div class="chips" role="group" aria-label="Filter by category">
+        ${cats.map((c) => `<button type="button" class="chip ${c === f.cat ? 'active' : ''}" data-cat="${esc(c)}" aria-pressed="${c === f.cat}">${esc(c)}</button>`).join('')}
+      </div>
     </div>
     <div id="grid" class="grid"></div>`;
 
   view().querySelectorAll('.chip').forEach((b) => b.addEventListener('click', () => {
     f.cat = b.dataset.cat;
-    view().querySelectorAll('.chip').forEach((x) => x.classList.toggle('active', x === b));
+    view().querySelectorAll('.chip').forEach((x) => {
+      x.classList.toggle('active', x === b);
+      x.setAttribute('aria-pressed', x === b);
+    });
     renderGrid();
   }));
   $('#search').addEventListener('input', (e) => { f.q = e.target.value; renderGrid(); });
   $('#hide-claimed')?.addEventListener('change', (e) => { f.hideClaimed = e.target.checked; renderGrid(); });
+  $('#add-wish')?.addEventListener('click', () => openItemEditor());
   $('#grid').addEventListener('click', onCardAction);
   renderGrid();
 }
@@ -158,7 +210,7 @@ function renderGrid() {
   const items = filteredItems();
   grid.innerHTML = items.length
     ? items.map(cardHTML).join('')
-    : `<div class="empty"><div class="empty-emoji">☃️</div><p>Nothing here. Try another filter.</p></div>`;
+    : `<div class="empty"><div class="empty-emoji">☃️</div><p>${state.items.length ? 'Nothing here. Try another filter.' : 'The list is empty. Add the first wish!'}</p></div>`;
 }
 
 function priorityHTML(p) {
@@ -168,38 +220,39 @@ function priorityHTML(p) {
   return `<span class="priority" title="${label}" aria-label="${label}">${'❤️'.repeat(n)}${'🤍'.repeat(3 - n)}</span>`;
 }
 
-function cardHTML(item, index) {
+function cardHTML(item) {
   const claim = state.claims[item.id];
   const mine = claim && sameName(claim.name, state.elfName);
-  const rot = ((index * 37) % 5) - 2; // gentle, stable tilt per card
   let status = '';
-  let claimBtn = '';
+  let mainBtn = '';
   if (state.elf) {
     if (claim) {
       status = `<p class="status ${claim.purchased ? 'bought' : 'claimed'}">${claim.purchased ? '🎁 Bought' : '🔖 Claimed'} by ${esc(claim.name)}${mine ? ' (you)' : ''}</p>`;
-      claimBtn = mine ? `<button type="button" class="btn btn-secondary" data-action="manage" data-id="${esc(item.id)}">Manage</button>` : '';
+      mainBtn = mine ? `<button type="button" class="btn btn-secondary" data-action="manage" data-id="${esc(item.id)}">Manage</button>` : '';
     } else {
       status = `<p class="status open">✨ Up for grabs</p>`;
-      claimBtn = `<button type="button" class="btn btn-primary" data-action="claim" data-id="${esc(item.id)}">Claim it</button>`;
+      mainBtn = `<button type="button" class="btn btn-primary" data-action="claim" data-id="${esc(item.id)}">Claim it</button>`;
     }
+  } else {
+    mainBtn = `<button type="button" class="btn btn-ghost" data-action="edit" data-id="${esc(item.id)}" aria-label="Edit ${esc(item.name)}">✏️ Edit</button>`;
   }
   return `
-    <article class="tag-card ${state.elf && claim ? 'is-claimed' : ''}" style="--rot:${rot}deg">
+    <article class="tag-card ${state.elf && claim ? 'is-claimed' : ''}">
       <span class="tag-hole" aria-hidden="true"></span>
       <div class="card-top">
         <span class="card-emoji" aria-hidden="true">${esc(item.emoji || '🎁')}</span>
         ${priorityHTML(item.priority)}
       </div>
       <h3 class="card-title">${esc(item.name)}</h3>
-      <p class="card-cat">${esc(item.category)}</p>
+      ${item.category ? `<p class="card-cat">${esc(item.category)}</p>` : ''}
       ${item.note ? `<p class="card-note">${esc(item.note)}</p>` : ''}
       ${item.details?.length ? `<ul class="card-details">${item.details.map((d) => `<li>${esc(d)}</li>`).join('')}</ul>` : ''}
       ${item.price ? `<p class="price">About $${esc(item.price)}</p>` : ''}
       ${status}
       <div class="card-actions">
-        <a class="btn btn-ghost" href="${safeLink(item.url)}" target="_blank" rel="noopener noreferrer">View item ↗</a>
+        ${item.url ? `<a class="btn btn-ghost" href="${safeLink(item.url)}" target="_blank" rel="noopener noreferrer">View item ↗</a>` : ''}
         <button type="button" class="btn btn-ghost" data-action="alts" data-id="${esc(item.id)}">Cheaper options</button>
-        ${claimBtn}
+        ${mainBtn}
       </div>
     </article>`;
 }
@@ -209,9 +262,132 @@ function onCardAction(e) {
   if (!btn) return;
   const item = state.items.find((i) => i.id === btn.dataset.id);
   if (!item) return;
-  if (btn.dataset.action === 'alts') openAlternatives(item);
-  if (btn.dataset.action === 'claim') openClaim(item);
-  if (btn.dataset.action === 'manage') openManage(item);
+  const action = btn.dataset.action;
+  if (action === 'alts') openAlternatives(item);
+  if (action === 'claim') openClaim(item);
+  if (action === 'manage') openManage(item);
+  if (action === 'edit') openItemEditor(item);
+}
+
+// ----- item editor -----
+function openItemEditor(existing) {
+  const it = existing || { priority: 2, emoji: '🎁' };
+  const cats = [...new Set(state.items.map((i) => i.category).filter(Boolean))];
+  const iconChoices = ICONS.includes(it.emoji) ? ICONS : [it.emoji, ...ICONS];
+  openModal(`
+    <h2>${existing ? 'Edit wish ✏️' : 'Add a wish ✨'}</h2>
+    <form id="item-form" class="form" novalidate>
+      <label>Link
+        <input name="url" type="url" inputmode="url" placeholder="Paste a product link" value="${esc(it.url)}">
+        <span class="hint" id="link-hint">Amazon links fill in the title for you.</span>
+      </label>
+      <label>Title
+        <input name="name" required maxlength="80" placeholder="What is it?" value="${esc(it.name)}">
+      </label>
+
+      <fieldset class="field">
+        <legend>Icon</legend>
+        <div class="icon-grid" role="radiogroup" aria-label="Icon">
+          ${iconChoices.map((e) => `
+            <label class="icon-opt">
+              <input type="radio" name="emoji" value="${esc(e)}" ${e === it.emoji ? 'checked' : ''}>
+              <span aria-hidden="true">${esc(e)}</span>
+            </label>`).join('')}
+        </div>
+      </fieldset>
+
+      <fieldset class="field">
+        <legend>How much do you want it?</legend>
+        <div class="segmented segmented-stack" role="radiogroup" aria-label="Priority">
+          ${[[1, 'Nice to have'], [2, 'Would love it'], [3, 'Top wish']].map(([v, label]) => `
+            <label class="seg-opt">
+              <input type="radio" name="priority" value="${v}" ${Number(it.priority) === v ? 'checked' : ''}>
+              <span><span class="seg-hearts" aria-hidden="true">${'❤️'.repeat(v)}</span>${label}</span>
+            </label>`).join('')}
+        </div>
+      </fieldset>
+
+      <div class="form-row">
+        <label>Category
+          <input name="category" list="cat-list" maxlength="30" placeholder="e.g. Pickleball" value="${esc(it.category)}">
+          <datalist id="cat-list">${cats.map((c) => `<option value="${esc(c)}">`).join('')}</datalist>
+        </label>
+        <label><span>Price <span class="muted">(about)</span></span>
+          <input name="price" type="number" inputmode="decimal" min="0" step="1" placeholder="$" value="${esc(it.price ?? '')}">
+        </label>
+      </div>
+
+      <label>Notes for family
+        <textarea name="note" rows="2" maxlength="300" placeholder="Why you want it, which version…">${esc(it.note)}</textarea>
+      </label>
+      <label><span>Size, color or model <span class="muted">(one per line)</span></span>
+        <textarea name="details" rows="2" maxlength="300" placeholder="Men's 10.5&#10;Black">${esc((it.details || []).join('\n'))}</textarea>
+      </label>
+
+      <p class="form-error" id="item-error" hidden></p>
+      <div class="form-actions">
+        ${existing ? `<button type="button" class="btn btn-danger" id="delete-item">Remove</button>` : ''}
+        <span class="spacer"></span>
+        <button type="button" class="btn btn-ghost" data-close>Cancel</button>
+        <button type="submit" class="btn btn-primary">${existing ? 'Save' : 'Add to list'}</button>
+      </div>
+    </form>`, { wide: true });
+
+  const form = $('#item-form');
+  const urlInput = form.elements.url;
+  const nameInput = form.elements.name;
+  const hint = $('#link-hint');
+  const onLink = () => {
+    const info = readLink(urlInput.value);
+    if (!urlInput.value.trim()) { hint.textContent = 'Amazon links fill in the title for you.'; return; }
+    if (!info) { hint.textContent = 'That doesn’t look like a link.'; return; }
+    urlInput.value = info.url;
+    if (info.title && !nameInput.value.trim()) nameInput.value = info.title;
+    hint.textContent = info.title ? `From ${info.store}. Tidy the title if you like.` : `From ${info.store}.`;
+  };
+  urlInput.addEventListener('paste', () => setTimeout(onLink, 0));
+  urlInput.addEventListener('change', onLink);
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = new FormData(form);
+    const name = String(fd.get('name') || '').trim();
+    const err = $('#item-error');
+    if (!name) {
+      err.textContent = 'Give it a title.';
+      err.hidden = false;
+      nameInput.focus();
+      return;
+    }
+    const rawUrl = String(fd.get('url') || '').trim();
+    const item = {
+      ...(existing || {}),
+      id: existing?.id || `${slug(name)}-${Math.random().toString(36).slice(2, 6)}`,
+      name,
+      url: rawUrl ? (readLink(rawUrl)?.url || rawUrl) : '',
+      emoji: String(fd.get('emoji') || '🎁'),
+      priority: Number(fd.get('priority') || 2),
+      category: String(fd.get('category') || '').trim(),
+      price: fd.get('price') ? Number(fd.get('price')) : null,
+      note: String(fd.get('note') || '').trim(),
+      details: String(fd.get('details') || '').split('\n').map((s) => s.trim()).filter(Boolean),
+    };
+    try {
+      state.items = await state.store.saveItem(item, state.items);
+      closeModal();
+      toast(existing ? '✅ Wish updated' : `✨ Added ${item.name}`);
+    } catch {
+      err.textContent = 'Could not save. Try again.';
+      err.hidden = false;
+    }
+  });
+
+  $('#delete-item')?.addEventListener('click', async () => {
+    if (!confirm(`Remove "${existing.name}" from your list? If someone already claimed it, they'll see it was removed.`)) return;
+    state.items = await state.store.deleteItem(existing.id, state.items);
+    closeModal();
+    toast('🗑️ Removed from your list');
+  });
 }
 
 // ----- cheaper alternatives -----
@@ -231,7 +407,7 @@ function openAlternatives(item) {
             </div>
             <a class="btn btn-ghost small" href="${shopSearch(a.query || a.name)}" target="_blank" rel="noopener noreferrer">Find it ↗</a>
           </li>`).join('')}
-      </ul>` : `<p>No budget picks for this one yet, but the price check links below can still help.</p>`}
+      </ul>` : `<p>No budget picks for this one yet, but the price links below can still help.</p>`}
     <div class="deal-links">
       <a class="btn btn-secondary" href="${shopSearch(item.name)}" target="_blank" rel="noopener noreferrer">🔎 Compare prices</a>
       ${asin ? `<a class="btn btn-secondary" href="https://camelcamelcamel.com/product/${asin}" target="_blank" rel="noopener noreferrer">📉 Amazon price history</a>` : ''}
@@ -247,7 +423,7 @@ function openClaim(item) {
       <label>Your name
         <input name="name" required maxlength="40" autocomplete="given-name" value="${esc(state.elfName)}">
       </label>
-      <label>Note for other elves <span class="muted">(optional)</span>
+      <label><span>Note for other elves <span class="muted">(optional)</span></span>
         <input name="note" maxlength="140" placeholder="e.g. getting the blue one">
       </label>
       <label class="check"><input type="checkbox" name="purchased"> I've already bought it</label>
@@ -265,6 +441,7 @@ function openClaim(item) {
     try {
       await state.store.claim(item.id, {
         name,
+        itemName: item.name,
         note: String(fd.get('note') || '').trim(),
         purchased: fd.get('purchased') === 'on',
       });
@@ -290,6 +467,7 @@ function openManage(item) {
       <label class="check"><input type="checkbox" name="purchased" ${claim.purchased ? 'checked' : ''}> Bought it</label>
       <div class="form-actions">
         <button type="button" class="btn btn-danger" id="unclaim-btn">Release it</button>
+        <span class="spacer"></span>
         <button type="submit" class="btn btn-primary">Save</button>
       </div>
     </form>`);
@@ -308,6 +486,140 @@ function openManage(item) {
     await state.store.unclaim(item.id);
     closeModal();
     toast('🎈 Released back to the list');
+  });
+}
+
+// ----- profile / sizes -----
+function renderProfile() {
+  const p = state.profile;
+  const sizes = p.sizes || {};
+  const fav = p.favorites || {};
+  const pay = p.payback || {};
+  const empty = '<span class="muted">Not added yet</span>';
+  const initial = esc((p.name || CONFIG.ownerName || '?').trim().charAt(0).toUpperCase());
+  const bday = p.birthday ? new Date(`${p.birthday}T12:00:00`).toLocaleDateString(undefined, { month: 'long', day: 'numeric' }) : '';
+  const filledSizes = SIZE_FIELDS.filter(([k]) => sizes[k]).length;
+
+  view().innerHTML = `
+    <section class="profile">
+      <div class="profile-head">
+        <div class="avatar" aria-hidden="true">${initial}</div>
+        <div class="profile-id">
+          <h2>${esc(p.name || CONFIG.ownerName)}</h2>
+          <p class="muted">${bday ? `🎂 Birthday: ${esc(bday)}` : 'Birthday not added'} · ${p.visibility === 'public' ? '🌍 Public profile' : '🔒 Family circle only'}</p>
+        </div>
+        ${isOwnerView() ? `<button type="button" class="btn btn-primary" id="edit-profile">✏️ Edit</button>` : ''}
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <h3>Sizes</h3>
+          <span class="muted small">${filledSizes}/${SIZE_FIELDS.length} added</span>
+        </div>
+        <dl class="size-grid">
+          ${SIZE_FIELDS.map(([k, label]) => `
+            <div class="size-tile ${sizes[k] ? '' : 'is-empty'}">
+              <dt>${label}</dt>
+              <dd>${sizes[k] ? esc(sizes[k]) : '—'}</dd>
+            </div>`).join('')}
+        </dl>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><h3>Favorites</h3></div>
+        <dl class="fact-list">
+          ${FAVORITE_FIELDS.map(([k, label]) => `<div><dt>${label}</dt><dd>${fav[k] ? esc(fav[k]) : empty}</dd></div>`).join('')}
+        </dl>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><h3>Please don't buy</h3></div>
+        <p class="panel-text">${p.avoid ? esc(p.avoid) : empty}</p>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><h3>Pay-back handles</h3><span class="muted small">for group gifts</span></div>
+        <dl class="fact-list">
+          ${PAYBACK_FIELDS.map(([k, label]) => `<div><dt>${label}</dt><dd>${pay[k] ? esc(pay[k]) : empty}</dd></div>`).join('')}
+        </dl>
+      </div>
+    </section>`;
+  $('#edit-profile')?.addEventListener('click', openProfileEditor);
+}
+
+function openProfileEditor() {
+  const p = state.profile;
+  const sizes = p.sizes || {};
+  const fav = p.favorites || {};
+  const pay = p.payback || {};
+  openModal(`
+    <h2>Your profile 🧦</h2>
+    <form id="profile-form" class="form">
+      <div class="form-row">
+        <label>Name <input name="name" maxlength="40" value="${esc(p.name)}"></label>
+        <label>Birthday <input name="birthday" type="date" value="${esc(p.birthday)}"></label>
+      </div>
+
+      <fieldset class="field">
+        <legend>Who can see it</legend>
+        <div class="segmented" role="radiogroup" aria-label="Profile visibility">
+          <label class="seg-opt"><input type="radio" name="visibility" value="circle" ${p.visibility !== 'public' ? 'checked' : ''}><span>🔒 Family circle</span></label>
+          <label class="seg-opt"><input type="radio" name="visibility" value="public" ${p.visibility === 'public' ? 'checked' : ''}><span>🌍 Anyone with the link</span></label>
+        </div>
+      </fieldset>
+
+      <fieldset class="field">
+        <legend>Sizes</legend>
+        <div class="form-grid">
+          ${SIZE_FIELDS.map(([k, label]) => `<label>${label}<input name="size_${k}" maxlength="30" value="${esc(sizes[k])}"></label>`).join('')}
+        </div>
+      </fieldset>
+
+      <fieldset class="field">
+        <legend>Favorites</legend>
+        <div class="form-grid">
+          ${FAVORITE_FIELDS.map(([k, label, ph]) => `<label>${label}<input name="fav_${k}" maxlength="120" placeholder="${esc(ph)}" value="${esc(fav[k])}"></label>`).join('')}
+        </div>
+      </fieldset>
+
+      <label>Please don't buy
+        <textarea name="avoid" rows="2" maxlength="300" placeholder="Things you have or don't want">${esc(p.avoid)}</textarea>
+      </label>
+
+      <fieldset class="field">
+        <legend>Pay-back handles <span class="muted">(for group gifts)</span></legend>
+        <div class="form-grid">
+          ${PAYBACK_FIELDS.map(([k, label, ph]) => `<label>${label}<input name="pay_${k}" maxlength="80" placeholder="${esc(ph)}" value="${esc(pay[k])}"></label>`).join('')}
+        </div>
+      </fieldset>
+
+      <div class="form-actions">
+        <button type="button" class="btn btn-ghost" data-close>Cancel</button>
+        <button type="submit" class="btn btn-primary">Save profile</button>
+      </div>
+    </form>`, { wide: true });
+
+  $('#profile-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const pick = (prefix, fields) => Object.fromEntries(fields.map(([k]) => [k, String(fd.get(`${prefix}_${k}`) || '').trim()]));
+    const next = {
+      ...p,
+      name: String(fd.get('name') || '').trim() || CONFIG.ownerName,
+      birthday: String(fd.get('birthday') || ''),
+      visibility: fd.get('visibility') === 'public' ? 'public' : 'circle',
+      sizes: pick('size', SIZE_FIELDS),
+      favorites: pick('fav', FAVORITE_FIELDS),
+      avoid: String(fd.get('avoid') || '').trim(),
+      payback: pick('pay', PAYBACK_FIELDS),
+    };
+    try {
+      state.profile = await state.store.saveProfile(next);
+      closeModal();
+      toast('✅ Profile saved');
+    } catch {
+      toast('😬 Could not save. Try again.');
+    }
   });
 }
 
@@ -337,6 +649,10 @@ function renderShop() {
     (acc[n] ||= []).push(i);
     return acc;
   }, {});
+  // Claims whose item the owner has since removed from the list.
+  const ids = new Set(state.items.map((i) => i.id));
+  const orphaned = Object.entries(state.claims)
+    .filter(([id, c]) => !ids.has(id) && sameName(c.name, state.elfName));
   const pct = total ? Math.round((claimedItems.length / total) * 100) : 0;
 
   const row = (i, manage) => {
@@ -364,9 +680,15 @@ function renderShop() {
         <div class="progress-bar" style="width:${pct}%"></div>
       </div>
 
+      ${orphaned.length ? `
+        <div class="notice">
+          <strong>Heads up:</strong> ${esc(CONFIG.ownerName)} removed ${orphaned.length === 1 ? 'a gift' : `${orphaned.length} gifts`} you claimed.
+          <ul>${orphaned.map(([id, c]) => `<li>${esc(c.itemName || id)}${c.purchased ? ' (you bought it)' : ''} <button type="button" class="btn btn-ghost small" data-orphan="${esc(id)}">Dismiss</button></li>`).join('')}</ul>
+        </div>` : ''}
+
       <h2 class="section-title">Your sleigh 🛷</h2>
       ${mine.length ? `<ul class="shop-list">${mine.map((i) => row(i, true)).join('')}</ul>`
-        : `<p class="muted">You haven't claimed anything yet. Pick something below or from the catalog.</p>`}
+        : `<p class="muted">You haven't claimed anything yet. Pick something below or from the wishlist.</p>`}
 
       <h2 class="section-title">Other elves</h2>
       ${Object.keys(byElf).length ? Object.entries(byElf).map(([name, list]) => `
@@ -378,12 +700,16 @@ function renderShop() {
       ${open.length ? `<ul class="shop-list">${open.map((i) => `
         <li class="shop-row">
           <span class="row-emoji" aria-hidden="true">${esc(i.emoji || '🎁')}</span>
-          <div class="row-main"><strong>${esc(i.name)}</strong><span class="row-note">${esc(i.category)}</span></div>
+          <div class="row-main"><strong>${esc(i.name)}</strong><span class="row-note">${esc(i.category || '')}</span></div>
           <button type="button" class="btn btn-primary small" data-action="claim" data-id="${esc(i.id)}">Claim</button>
         </li>`).join('')}</ul>`
         : `<p class="muted">Every wish is claimed. Great work, elves! 🎉</p>`}
     </section>`;
-  view().querySelector('.shop').addEventListener('click', onCardAction);
+  const shop = view().querySelector('.shop');
+  shop.addEventListener('click', onCardAction);
+  shop.querySelectorAll('[data-orphan]').forEach((b) => b.addEventListener('click', async () => {
+    await state.store.unclaim(b.dataset.orphan);
+  }));
 }
 
 // ----- elf mode -----
@@ -480,8 +806,8 @@ function renderMemories() {
       ${years.length ? years.map((y) => `
         <h3 class="year-title"><span>${esc(y)}</span></h3>
         <div class="polaroids">
-          ${byYear[y].map((m, i) => `
-            <figure class="polaroid" style="--rot:${(i % 2 ? 1 : -1) * (1 + (i % 3))}deg" data-id="${esc(m.id)}" tabindex="0" role="button" aria-label="Open photo: ${esc(m.caption || 'memory')}">
+          ${byYear[y].map((m) => `
+            <figure class="polaroid" data-id="${esc(m.id)}" tabindex="0" role="button" aria-label="Open photo: ${esc(m.caption || 'memory')}">
               <img src="${safeImg(m.image)}" alt="${esc(m.caption || 'Christmas memory')}" loading="lazy">
               <figcaption>${esc(m.caption || '')}</figcaption>
             </figure>`).join('')}
@@ -508,13 +834,12 @@ function openLightbox(m) {
       <img src="${safeImg(m.image)}" alt="${esc(m.caption || 'Christmas memory')}">
       <figcaption><strong>${esc(m.year || '')}</strong> ${esc(m.caption || '')}</figcaption>
     </figure>
-    ${deletable ? `<div class="form-actions"><button type="button" class="btn btn-danger small" id="del-memory">Delete photo</button></div>` : ''}`);
+    ${deletable ? `<div class="form-actions"><button type="button" class="btn btn-danger small" id="del-memory">Delete photo</button></div>` : ''}`, { wide: true });
   $('#del-memory')?.addEventListener('click', async () => {
     if (!confirm('Delete this memory? This can’t be undone.')) return;
     await state.store.deleteMemory(m.id);
     await refreshMemories();
     closeModal();
-    render();
     toast('🗑️ Memory deleted');
   });
 }
@@ -563,7 +888,6 @@ function openAddMemory() {
       });
       await refreshMemories();
       closeModal();
-      render();
       toast('📸 Memory saved!');
     } catch (ex) {
       err.textContent = ex.message === 'storage-full'
@@ -600,10 +924,10 @@ function startSnow() {
   if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
   const snow = $('#snow');
   const flakes = ['❄', '❅', '❆', '•'];
-  const count = innerWidth < 600 ? 22 : 40;
+  const count = innerWidth < 600 ? 18 : 34;
   snow.innerHTML = Array.from({ length: count }, () => {
     const size = 0.5 + Math.random() * 1.1;
-    return `<span class="flake" style="left:${Math.random() * 100}%;font-size:${size}rem;animation-duration:${8 + Math.random() * 10}s,${3 + Math.random() * 3}s;animation-delay:-${Math.random() * 18}s,0s;opacity:${0.35 + Math.random() * 0.5}">${flakes[Math.floor(Math.random() * flakes.length)]}</span>`;
+    return `<span class="flake" style="left:${Math.random() * 100}%;font-size:${size}rem;animation-duration:${8 + Math.random() * 10}s,${3 + Math.random() * 3}s;animation-delay:-${Math.random() * 18}s,0s;opacity:${0.3 + Math.random() * 0.45}">${flakes[Math.floor(Math.random() * flakes.length)]}</span>`;
   }).join('');
 }
 
@@ -628,22 +952,25 @@ function startCountdown() {
 async function init() {
   startSnow();
   startCountdown();
-  const [itemsData, memoriesData] = await Promise.all([
+  const [itemsData, memoriesData, profileData] = await Promise.all([
     loadJSON('data/items.json', { items: [] }),
     loadJSON('data/memories.json', { memories: [] }),
+    loadJSON('data/profile.json', { profile: {} }),
   ]);
-  state.items = itemsData.items || [];
+  state.seedItems = itemsData.items || [];
   state.staticMemories = memoriesData.memories || [];
   state.store = await createStore();
+  state.items = await state.store.listItems(state.seedItems);
+  state.profile = await state.store.getProfile(profileData.profile || {});
   renderStorageNote();
   await refreshMemories();
   state.store.subscribeClaims((claims) => {
     state.claims = claims;
-    // Don't wipe a form the user is filling in; the next render catches up.
+    // Don't wipe a form the user is filling in; closing the modal re-renders.
     if (!modal.open) render();
   });
   modal.addEventListener('close', render);
-  window.addEventListener('hashchange', () => { render(); window.scrollTo({ top: 0, behavior: 'smooth' }); });
+  window.addEventListener('hashchange', () => { render(); window.scrollTo({ top: 0 }); });
   $('#mode-btn').addEventListener('click', onModeClick);
   render();
 }

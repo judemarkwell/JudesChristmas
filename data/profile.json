@@ -1,0 +1,28 @@
+{
+  "_help": "Starting profile. Edits made on the site are saved on top of this.",
+  "profile": {
+    "name": "Jude",
+    "birthday": "",
+    "visibility": "circle",
+    "sizes": {
+      "shirt": "",
+      "hoodie": "",
+      "pants": "",
+      "shoe": "",
+      "ring": "",
+      "hat": ""
+    },
+    "favorites": {
+      "colors": "",
+      "brands": "",
+      "stores": "",
+      "treats": ""
+    },
+    "avoid": "",
+    "payback": {
+      "venmo": "",
+      "paypal": "",
+      "cashapp": ""
+    }
+  }
+}
