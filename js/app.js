@@ -141,6 +141,27 @@ modal.addEventListener('click', (e) => {
   if (e.target === modal || e.target.closest('[data-close]')) closeModal();
 });
 
+// Phones: keep the open sheet above the on-screen keyboard.
+// visualViewport shrinks when the keyboard opens (iOS keeps the layout viewport the same size),
+// so the modal sizes itself to it, and the focused field scrolls to the middle of what's visible.
+function fitToVisibleArea() {
+  const vv = window.visualViewport;
+  if (!vv) return;
+  document.documentElement.style.setProperty('--vvh', `${Math.round(vv.height)}px`);
+  document.documentElement.style.setProperty('--vvtop', `${Math.round(vv.offsetTop)}px`);
+}
+if (window.visualViewport) {
+  visualViewport.addEventListener('resize', fitToVisibleArea);
+  visualViewport.addEventListener('scroll', fitToVisibleArea);
+  fitToVisibleArea();
+}
+modal.addEventListener('focusin', (e) => {
+  const field = e.target.closest('input, textarea, select');
+  if (!field || ['radio', 'checkbox', 'file'].includes(field.type)) return;
+  // Wait for the keyboard to finish opening before measuring.
+  setTimeout(() => field.scrollIntoView({ block: 'center', behavior: 'smooth' }), 320);
+});
+
 let toastTimer;
 function toast(msg) {
   const t = $('#toast');

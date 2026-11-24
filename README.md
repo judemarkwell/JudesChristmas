@@ -72,6 +72,17 @@ python3 -m http.server 8000
 
 The page has to be served (not opened as a file) so it can load the JSON files.
 
+## Phone check
+
+Run this before pushing UI changes. It opens every screen and form at phone sizes, simulates the on-screen keyboard, and fails if a field or the Save button is hidden, a tap target is under 44px, the page scrolls sideways, or there's a script error.
+
+```bash
+pip install playwright && playwright install chromium
+python3 tests/mobile_check.py
+```
+
+New forms go in the `FORMS` list at the top of the script.
+
 ## Sharing claims with family (Firebase)
 
 Out of the box the site runs in **demo mode**: claims and memories are saved only in the browser you're using. To let everyone see the same claims live:
