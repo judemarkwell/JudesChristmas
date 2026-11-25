@@ -40,7 +40,10 @@ body {
     radial-gradient(circle at 60px 60px, rgba(29, 107, 71, 0.05) 2px, transparent 3px);
   background-size: 80px 80px;
   line-height: 1.5;
-  min-height: 100vh;
+  /* Always a little taller than the screen. On newer iPhones, Safari's bottom toolbar never
+     settles on a page that can't scroll, and taps on the tab bar lag until it does. */
+  min-height: calc(100vh + 2px);
+  min-height: calc(100lvh + 2px);
   -webkit-tap-highlight-color: transparent;
 }
 img { max-width: 100%; display: block; }
