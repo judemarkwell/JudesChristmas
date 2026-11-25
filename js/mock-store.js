@@ -6,7 +6,7 @@
 import { newCode } from './store.js';
 
 const KEY = 'mock.db';
-const blank = () => ({ users: {}, index: {}, circles: {}, invites: {}, items: {}, claims: {} });
+const blank = () => ({ users: {}, index: {}, circles: {}, invites: {}, items: {}, claims: {}, pmem: {} });
 const load = () => { try { return JSON.parse(localStorage.getItem(KEY)) || blank(); } catch { return blank(); } };
 const save = (db) => localStorage.setItem(KEY, JSON.stringify(db));
 const clone = (x) => (x == null ? x : JSON.parse(JSON.stringify(x)));
@@ -138,6 +138,26 @@ export function createMockStore() {
     },
     async updateClaim(owner, itemId, patch) { mutate((db) => Object.assign(db.claims[owner][itemId], patch)); },
     async unclaim(owner, itemId) { mutate((db) => { delete db.claims[owner][itemId]; }); },
+
+    async disbandCircle(cid) {
+      mutate((db) => {
+        const c = db.circles[cid];
+        if (!c || c.createdBy !== me.uid) throw Object.assign(new Error('denied'), { code: 'permission-denied' });
+        for (const uid of Object.keys(c.members)) {
+          if (db.index[uid]) db.index[uid].circles = db.index[uid].circles.filter((x) => x !== cid);
+        }
+        delete db.invites[c.inviteCode];
+        delete db.circles[cid];
+      });
+    },
+    watchProfileMemories(uid, cb) {
+      return watch((db) => (uid === me.uid || shares(db, uid) || db.users[uid]?.visibility === 'public'
+        ? Object.entries(db.pmem?.[uid] || {}).map(([id, m]) => ({ id, ...m })) : null), cb);
+    },
+    async addProfileMemory(uid, memory) {
+      mutate((db) => { ((db.pmem ||= {})[uid] ||= {})[`p${Date.now()}`] = { ...memory, createdAt: Date.now() }; });
+    },
+    async deleteProfileMemory(uid, id) { mutate((db) => { delete db.pmem[uid][id]; }); },
 
     watchMemories(cid, cb) {
       return watch((db) => (active(db, cid, me.uid) ? Object.entries(db.circles[cid].memories || {}).map(([id, m]) => ({ id, ...m })) : null), cb);

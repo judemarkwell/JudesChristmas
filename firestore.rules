@@ -13,6 +13,7 @@ rules_version = '2';
 //   index/{uid}                   circles: [cid…], changed: cid      (which circles a person is active in)
 //   users/{uid}                   profile: sizes, favorites, visibility…
 //   users/{uid}/items/{id}        the wishlist
+//   users/{uid}/memories/{id}     photos on a profile (posted there, or saved from a circle)
 //   users/{uid}/claims/{itemId}   who is buying what (never readable by uid)
 //
 // index/{uid} is what "shares a circle" checks against. Only an admin approving someone (or the
@@ -71,6 +72,8 @@ service cloud.firestore {
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'inviteCode'])
         && request.resource.data.name is string
         && request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 40;
+      // Disbanding: only the person who created the circle.
+      allow delete: if isAdmin(cid) && resource.data.createdBy == me();
 
       match /members/{uid} {
         allow read: if isActive(cid) || (signedIn() && me() == uid);
@@ -174,6 +177,15 @@ service cloud.firestore {
       match /items/{itemId} {
         allow read: if (signedIn() && me() == uid) || sharesCircle(uid) || isPublic(uid);
         allow write: if signedIn() && me() == uid;
+      }
+
+      // Memories posted to a profile, or saved (copied) from a circle's memories.
+      match /memories/{mid} {
+        allow read: if (signedIn() && me() == uid) || sharesCircle(uid) || isPublic(uid);
+        allow create: if signedIn() && me() == uid
+          && request.resource.data.image is string
+          && request.resource.data.image.size() < 900000;
+        allow delete: if signedIn() && me() == uid;
       }
 
       match /claims/{itemId} {

@@ -103,6 +103,23 @@ await test('a removal that leaves the membership behind is refused', async () =>
   await assertFails(updateDoc(doc(jude, 'index', 'jude'), { circles: arrayRemove('fam'), changed: 'fam' }));
 });
 
+await test('profile memories: owner posts, circle can view, others cannot', async () => {
+  await assertSucceeds(setDoc(doc(jude, 'users/jude/memories', 'm1'), { image: 'data:image/jpeg;base64,xx', year: 2025 }));
+  await assertFails(setDoc(doc(eve, 'users/jude/memories', 'm2'), { image: 'data:image/jpeg;base64,xx' }));
+  await assertFails(getDocs(collection(eve, 'users/jude/memories')));
+});
+
+await test('only the creator can disband', async () => {
+  // Make mom an admin again, then check she still cannot delete the circle.
+  await assertSucceeds(setDoc(doc(mom, 'circles/fam/members', 'mom'), { name: 'Mom', role: 'member', status: 'pending', code: 'code123' }));
+  const b = writeBatch(jude);
+  b.update(doc(jude, 'circles/fam/members', 'mom'), { status: 'active', role: 'admin' });
+  b.update(doc(jude, 'index', 'mom'), { circles: arrayUnion('fam'), changed: 'fam' });
+  await assertSucceeds(b.commit());
+  await assertFails(deleteDoc(doc(mom, 'circles', 'fam')));
+  await assertSucceeds(deleteDoc(doc(jude, 'circles', 'fam')));
+});
+
 await env.cleanup();
 assert.ok(passed > 0);
 console.log(`\n${passed} rules tests passed`);

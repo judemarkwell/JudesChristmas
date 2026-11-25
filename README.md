@@ -8,12 +8,12 @@ Live at **https://judemarkwell.github.io/JudesChristmas/**
 
 | Tab | What it does |
 | --- | --- |
-| 🏡 **Family** | Everyone in your circle, with wish counts and upcoming birthdays. Tap someone to see their list and sizes, and claim a gift. Admins see who's waiting to join. |
-| 🎁 **My list** | Your wishes: add, edit and remove them, plus your sizes, favorites, "please don't buy" list and pay-back handles. You never see claims on your own list. |
-| 🛷 **Shopping** | Everything you've claimed, for everyone, with a "bought" checkbox. |
-| 📸 **Memories** | The circle's photo scrapbook, by year. |
+| 🎄 **Circles** | Your circles, plus **Start a circle** and **Join with a link**. Open a circle to see its members and its shared memories, copy the invite link, or open its settings (approvals, admins, rename, leave; the creator can disband it). Tap a member to see their profile. |
+| 🎁 **My list** | Your wishes: add, edit and remove them. You never see claims on your own list. |
+| 🛷 **Shopping** | Everything you've claimed, for everyone, with a "bought" toggle. |
+| 👤 **Profile** | Your profile page: photo, birthday, sizes, favorites, "please don't buy", pay-back handles, and your memories. Post photos here, or tap ⭐ **Save to my profile** on any circle memory (it's copied, so it stays even if the circle deletes it). |
 
-The account button (top right) switches circles, opens circle settings (invite link, approvals, members, admins), and signs out.
+Everyone's profile looks like a social page, with a **View wishlist** button that opens their list separately.
 
 **Joining:** an admin copies the invite link from circle settings and sends it out. Whoever opens it signs in and taps **Ask to join**, and an admin lets them in. Making a new link stops the old one from working.
 
@@ -31,6 +31,8 @@ Already done for the `christmas-circle` project:
 Still to do:
 
 5. **Firestore Database → Rules**: paste in all of `firestore.rules`, then click **Publish**. Paste it again whenever this file changes.
+
+Texted invite links show a preview card (`img/invite-card.png`, set in the `og:` tags in `index.html`). Messages apps cache previews, so a link texted before a change may keep its old look.
 
 No paid plan is needed. Photos are shrunk to under ~850 KB and stored in the database itself.
 

@@ -37,19 +37,23 @@ KEYBOARD = 336  # typical phone keyboard height in CSS px
 # Jude (admin, with his starter list), Mom (member), Sam (waiting to be let in),
 # a signed-in newcomer with no circle yet, and a signed-out visitor.
 VIEWS = [
-    ('guest', '#family'),          # landing page
-    ('newbie', '#family'),         # first-time setup
-    ('jude', '#family'), ('jude', '#mine'), ('jude', '#person-u-mom'), ('jude', '#shop'),
-    ('jude', '#memories'), ('jude', '#circle'),
-    ('mom', '#person-u-jude'), ('mom', '#shop'), ('mom', '#circle'),
+    ('guest', '#circles'),         # landing page
+    ('newbie', '#circles'),        # no circle yet
+    ('jude', '#circles'), ('jude', '#circle-c1'), ('jude', '#settings-c1'), ('jude', '#mine'),
+    ('jude', '#shop'), ('jude', '#profile'), ('jude', '#person-u-mom'), ('jude', '#list-u-mom'),
+    ('mom', '#circle-c1'), ('mom', '#settings-c1'), ('mom', '#person-u-jude'), ('mom', '#list-u-jude'), ('mom', '#shop'),
 ]
 # Each form: who, where, how to open it, then the selector of its <form>.
 FORMS = [
+    ('Start a circle', 'jude', '#circles', ['#start-circle'], '#create-form'),
+    ('Join with a link', 'newbie', '#circles', ['#join-circle'], '#paste-form'),
     ('Add a wish', 'jude', '#mine', ['#add-wish'], '#item-form'),
     ('Edit a wish', 'jude', '#mine', ['[data-action=edit] >> nth=0'], '#item-form'),
-    ('Edit profile', 'jude', '#mine', ['#edit-profile'], '#profile-form'),
-    ('Claim a gift', 'mom', '#person-u-jude', ['[data-action=claim] >> nth=0'], '#claim-form'),
-    ('Add a memory', 'jude', '#memories', ['#add-memory'], '#memory-form'),
+    ('Edit profile', 'jude', '#profile', ['#edit-profile'], '#profile-form'),
+    ('Claim a gift', 'mom', '#list-u-jude', ['[data-action=claim] >> nth=0'], '#claim-form'),
+    ('Circle memory', 'jude', '#circle-c1', ['#add-memory'], '#memory-form'),
+    ('Profile memory', 'jude', '#profile', ['#post-memory'], '#memory-form'),
+    ('Rename circle', 'jude', '#settings-c1', [], '#rename-form'),
 ]
 
 
@@ -69,6 +73,7 @@ def fixture():
         'items': {'u-jude': {it['id']: {k: v for k, v in it.items() if k != 'id'} for it in items},
                   'u-mom': {'scarf': {'name': 'Wool scarf', 'emoji': '🧣', 'priority': 2}}, 'u-sam': {}},
         'claims': {'u-jude': {}, 'u-mom': {}, 'u-sam': {}},
+        'pmem': {},
     }
 
 
@@ -129,6 +134,7 @@ def check(page, phone, w, h, problems):
         for step in steps:
             page.click(step)
         page.wait_for_selector(form)
+        in_sheet = page.evaluate(f"!!document.querySelector('#modal {form}')")
         fields = page.locator(f'{form} input:not([type=radio]):not([type=checkbox]):not([type=file]), {form} textarea')
         submit = page.locator(f'{form} [type=submit]')
         for mode in ('resizing', 'overlay'):
@@ -154,7 +160,8 @@ def check(page, phone, w, h, problems):
             fail('tap-size', name, f"'{t['name']}' is {t['h']}px tall")
         if page.evaluate("(() => { const m = document.getElementById('modal'); return m.scrollWidth > m.clientWidth + 1; })()"):
             fail('overflow', name, 'the sheet is wider than the screen')
-        page.keyboard.press('Escape')
+        if in_sheet:
+            page.keyboard.press('Escape')
 
 
 def main():

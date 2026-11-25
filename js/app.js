@@ -53,13 +53,13 @@ const state = {
   user: null,
   profile: null,
   circleIds: [],
-  circles: {},        // cid -> circle doc (name, inviteCode)
-  cid: ls.get('jc.circle'),
-  members: null,      // members of the open circle
+  circles: {},        // cid -> circle doc (name, inviteCode, createdBy)
+  circleMembers: {},  // cid -> members (including pending)
+  circleMemories: {}, // cid -> memories
   items: {},          // uid -> wishlist
   claims: {},         // uid -> { itemId: claim }   (never filled for yourself)
   profiles: {},       // uid -> profile
-  memories: null,
+  profileMemories: {},// uid -> memories on their profile
   pending: readPending(),
   pendingStatus: {},  // cid -> 'pending' | 'active' | 'gone'
   invites: {},        // code -> invite | null
@@ -78,13 +78,17 @@ function unsub(prefix) {
 }
 
 // ---------- routing ----------
+// #circles · #circle-<id> · #settings-<id> · #mine · #shop · #profile · #person-<uid> · #list-<uid> · #join-<code>
 function route() {
   const h = decodeURIComponent(location.hash.replace(/^#/, ''));
-  if (h.startsWith('join-')) return { view: 'join', code: h.slice(5) };
-  if (h.startsWith('person-')) return { view: 'person', uid: h.slice(7) };
-  if (['family', 'mine', 'shop', 'memories', 'circle'].includes(h)) return { view: h };
-  return { view: 'family' };
+  for (const [prefix, v, key] of [['join-', 'join', 'code'], ['circle-', 'circle', 'cid'], ['settings-', 'settings', 'cid'],
+    ['person-', 'person', 'uid'], ['list-', 'list', 'uid']]) {
+    if (h.startsWith(prefix)) return { view: v, [key]: h.slice(prefix.length) };
+  }
+  if (['circles', 'mine', 'shop', 'profile'].includes(h)) return { view: h };
+  return { view: 'circles' };
 }
+const TAB_FOR = { circles: 'circles', circle: 'circles', settings: 'circles', person: 'circles', list: 'circles', mine: 'mine', shop: 'shop', profile: 'profile' };
 const go = (hash) => { if (location.hash !== hash) location.hash = hash; else render(); };
 const view = () => $('#view');
 
@@ -151,6 +155,14 @@ modal.addEventListener('focusin', (e) => {
   requestAnimationFrame(lift);
   setTimeout(lift, 350);
 });
+// Same idea for the few forms that sit on the page itself (rename, invite link box).
+$('#view').addEventListener('focusin', (e) => {
+  const field = e.target.closest('.form input, .form textarea, .invite-box input');
+  if (!field || ['radio', 'checkbox', 'file'].includes(field.type) || !isPhone()) return;
+  const lift = () => { if (document.activeElement === field) field.scrollIntoView({ block: 'start', behavior: 'smooth' }); };
+  requestAnimationFrame(lift);
+  setTimeout(lift, 350);
+});
 modal.addEventListener('focusout', () => {
   typingTimer = setTimeout(() => {
     if (!modal.contains(document.activeElement)) modal.classList.remove('typing');
@@ -172,12 +184,14 @@ function oops(err) {
 }
 
 // ---------- data wiring ----------
+// Everything for every circle you're in is kept live: each circle's details, members and
+// memories, and for every person in any of your circles their profile, list, claims and
+// profile memories. Families are small, so this keeps every screen instant.
 async function onAuth(user) {
   unsub('');
-  openCid = undefined;
   Object.assign(state, {
-    user, profile: null, circleIds: [], circles: {}, members: null,
-    items: {}, claims: {}, profiles: {}, memories: null, pendingStatus: {},
+    user, profile: null, circleIds: [], circles: {}, circleMembers: {}, circleMemories: {},
+    items: {}, claims: {}, profiles: {}, profileMemories: {}, pendingStatus: {},
   });
   if (!user) { state.ready = true; render(); return; }
   try {
@@ -186,76 +200,68 @@ async function onAuth(user) {
     console.error(err);
     state.setupError = err?.code || String(err);
   }
-  sub('me:profile', state.store.watchProfile(user.uid, (p) => {
-    state.profile = p;
-    state.profiles[user.uid] = p;
-    scheduleRender();
-  }));
-  sub('me:items', state.store.watchItems(user.uid, (list) => { state.items[user.uid] = list || []; scheduleRender(); }));
-  sub('me:index', state.store.watchIndex(user.uid, onCircleIds));
+  const uid = user.uid;
+  sub('me:profile', state.store.watchProfile(uid, (p) => { state.profile = p; state.profiles[uid] = p; scheduleRender(); }));
+  sub('me:items', state.store.watchItems(uid, (l) => { state.items[uid] = l || []; scheduleRender(); }));
+  sub('me:memories', state.store.watchProfileMemories(uid, (l) => { state.profileMemories[uid] = l || []; scheduleRender(); }));
+  sub('me:index', state.store.watchIndex(uid, onCircleIds));
   watchPending();
   state.ready = true;
   render();
 }
 
 function onCircleIds(ids) {
+  const before = state.circleIds;
   state.circleIds = ids || [];
   // Requests that have been approved are now real circles.
-  const before = state.pending.length;
-  state.pending = state.pending.filter((p) => !state.circleIds.includes(p.cid));
-  if (state.pending.length !== before) {
+  const approved = state.pending.filter((p) => state.circleIds.includes(p.cid));
+  if (approved.length) {
+    state.pending = state.pending.filter((p) => !state.circleIds.includes(p.cid));
     writePending();
-    toast('🎉 You were approved!');
+    approved.forEach((p) => unsub(`me:pending:${p.cid}`));
+    toast(`🎉 You're in ${approved[0].name}!`);
   }
   for (const cid of state.circleIds) {
-    if (!subs.has(`circles:${cid}`)) {
-      sub(`circles:${cid}`, state.store.watchCircle(cid, (c) => { state.circles[cid] = c; scheduleRender(); }));
-    }
+    if (subs.has(`c:${cid}:doc`)) continue;
+    sub(`c:${cid}:doc`, state.store.watchCircle(cid, (c) => { state.circles[cid] = c; scheduleRender(); }));
+    sub(`c:${cid}:members`, state.store.watchMembers(cid, (m) => { state.circleMembers[cid] = m || []; syncPeople(); }));
+    sub(`c:${cid}:memories`, state.store.watchMemories(cid, (m) => { state.circleMemories[cid] = m || []; scheduleRender(); }));
   }
-  for (const key of [...subs.keys()].filter((k) => k.startsWith('circles:'))) {
-    if (!state.circleIds.includes(key.slice(8))) unsub(key);
+  for (const cid of before.filter((c) => !state.circleIds.includes(c))) {
+    unsub(`c:${cid}:`);
+    delete state.circles[cid];
+    delete state.circleMembers[cid];
+    delete state.circleMemories[cid];
   }
-  if (!state.circleIds.includes(state.cid)) state.cid = state.circleIds[0] || null;
-  openCircle(state.cid);
-  scheduleRender();
+  syncPeople();
 }
 
-let openCid;
-function openCircle(cid) {
-  if (cid === openCid) return;
-  openCid = cid;
-  unsub('circle:');
-  const mine = state.user?.uid;
-  for (const uid of Object.keys(state.items)) if (uid !== mine) delete state.items[uid];
-  state.claims = {};
-  for (const uid of Object.keys(state.profiles)) if (uid !== mine) delete state.profiles[uid];
-  state.members = null;
-  state.memories = null;
-  state.cid = cid;
-  if (!cid) { render(); return; }
-  ls.set('jc.circle', cid);
-  sub('circle:members', state.store.watchMembers(cid, onMembers));
-  sub('circle:memories', state.store.watchMemories(cid, (m) => { state.memories = m || []; scheduleRender(); }));
-  render();
+// Everyone active in any of your circles, except you.
+function people() {
+  const ids = new Set();
+  for (const cid of state.circleIds) {
+    for (const m of state.circleMembers[cid] || []) if (m.status === 'active' && m.id !== me()) ids.add(m.id);
+  }
+  return [...ids];
 }
 
-function onMembers(list) {
-  state.members = list || [];
-  const me = state.user.uid;
-  const people = state.members.filter((m) => m.status === 'active' && m.id !== me).map((m) => m.id);
-  for (const uid of people) {
-    if (subs.has(`circle:p:${uid}:items`)) continue;
-    sub(`circle:p:${uid}:items`, state.store.watchItems(uid, (l) => { state.items[uid] = l || []; scheduleRender(); }));
-    sub(`circle:p:${uid}:claims`, state.store.watchClaims(uid, (c) => { state.claims[uid] = c || {}; scheduleRender(); }));
-    sub(`circle:p:${uid}:profile`, state.store.watchProfile(uid, (p) => { state.profiles[uid] = p; scheduleRender(); }));
+function syncPeople() {
+  const now = people();
+  for (const uid of now) {
+    if (subs.has(`p:${uid}:items`)) continue;
+    sub(`p:${uid}:items`, state.store.watchItems(uid, (l) => { state.items[uid] = l || []; scheduleRender(); }));
+    sub(`p:${uid}:claims`, state.store.watchClaims(uid, (c) => { state.claims[uid] = c || {}; scheduleRender(); }));
+    sub(`p:${uid}:profile`, state.store.watchProfile(uid, (p) => { state.profiles[uid] = p; scheduleRender(); }));
+    sub(`p:${uid}:memories`, state.store.watchProfileMemories(uid, (l) => { state.profileMemories[uid] = l || []; scheduleRender(); }));
   }
-  for (const key of [...subs.keys()].filter((k) => k.startsWith('circle:p:'))) {
-    const uid = key.split(':')[2];
-    if (!people.includes(uid)) {
-      unsub(key);
+  for (const key of [...subs.keys()].filter((k) => k.startsWith('p:'))) {
+    const uid = key.split(':')[1];
+    if (!now.includes(uid)) {
+      unsub(`p:${uid}:`);
       delete state.items[uid];
       delete state.claims[uid];
       delete state.profiles[uid];
+      delete state.profileMemories[uid];
     }
   }
   scheduleRender();
@@ -263,6 +269,7 @@ function onMembers(list) {
 
 function watchPending() {
   for (const p of state.pending) {
+    if (subs.has(`me:pending:${p.cid}`)) continue;
     sub(`me:pending:${p.cid}`, state.store.watchMembership(p.cid, state.user.uid, (m) => {
       state.pendingStatus[p.cid] = m ? m.status : 'gone';
       scheduleRender();
@@ -283,13 +290,24 @@ function scheduleRender() {
 
 // ---------- shared bits ----------
 const me = () => state.user?.uid;
-const circle = () => state.circles[state.cid];
-const myMember = () => state.members?.find((m) => m.id === me());
-const isAdmin = () => myMember()?.role === 'admin' && myMember()?.status === 'active';
-const activeMembers = () => (state.members || []).filter((m) => m.status === 'active');
-const pendingMembers = () => (state.members || []).filter((m) => m.status === 'pending');
-const displayName = (uid) => state.profiles[uid]?.name || state.members?.find((m) => m.id === uid)?.name || 'Someone';
+const membersOf = (cid) => state.circleMembers[cid] || [];
+const activeIn = (cid) => membersOf(cid).filter((m) => m.status === 'active');
+const pendingIn = (cid) => membersOf(cid).filter((m) => m.status === 'pending');
+const myRoleIn = (cid) => membersOf(cid).find((m) => m.id === me());
+const isAdminOf = (cid) => myRoleIn(cid)?.role === 'admin' && myRoleIn(cid)?.status === 'active';
+const isCreatorOf = (cid) => state.circles[cid]?.createdBy === me();
+const memberRecord = (uid) => {
+  for (const cid of state.circleIds) {
+    const m = membersOf(cid).find((x) => x.id === uid);
+    if (m) return m;
+  }
+  return null;
+};
+const personOf = (uid) => state.profiles[uid] || memberRecord(uid) || {};
+const displayName = (uid) => personOf(uid).name || 'Someone';
+const sharedCircles = (uid) => state.circleIds.filter((cid) => activeIn(cid).some((m) => m.id === uid));
 const inviteLink = (code) => `${location.origin}${location.pathname}#join-${code}`;
+const profileHref = (uid) => (uid === me() ? '#profile' : `#person-${encodeURIComponent(uid)}`);
 
 function avatarHTML(person, size = 'md') {
   const name = person?.name || '?';
@@ -318,44 +336,49 @@ function daysUntilBirthday(iso) {
   if (next < today) next = new Date(now.getFullYear() + 1, m - 1, d);
   return Math.round((next - today) / 86400000);
 }
+const birthdayText = (iso) => (iso ? new Date(`${iso}T12:00:00`).toLocaleDateString(undefined, { month: 'long', day: 'numeric' }) : '');
 
 // The hero animates in once per visit, not on every live update.
 let entered = false;
 function enterAttr() { if (entered) return ''; entered = true; return 'data-enter'; }
+
+async function copyText(text, done) {
+  try {
+    await navigator.clipboard.writeText(text);
+    toast(done);
+    return true;
+  } catch {
+    toast('Couldn’t copy. Press and hold the link to copy it.');
+    return false;
+  }
+}
 
 // ---------- rendering ----------
 function render() {
   if (!state.ready) return;
   const r = route();
   const signedIn = !!state.user;
-  const inCircle = signedIn && !!state.cid;
-  document.body.classList.toggle('no-nav', !inCircle || r.view === 'join');
+  document.body.classList.toggle('no-nav', !signedIn || r.view === 'join');
+  const tab = TAB_FOR[r.view];
   document.querySelectorAll('.tab').forEach((t) => {
-    const active = t.dataset.view === r.view || (r.view === 'person' && t.dataset.view === 'family');
+    const active = t.dataset.view === tab;
     t.classList.toggle('active', active);
     if (active) t.setAttribute('aria-current', 'page'); else t.removeAttribute('aria-current');
   });
-  renderAccountButton();
   $('#storage-note').textContent = state.store?.mode === 'mock' ? '🧪 Test mode: data stays in this browser.' : '';
 
   if (!signedIn) return renderLanding(r);
-  if (r.view === 'join') return renderJoin(r.code);
-  if (!inCircle) return renderOnboarding();
-  if (r.view === 'mine') return renderMine();
-  if (r.view === 'person') return r.uid === me() ? go('#mine') : renderPerson(r.uid);
-  if (r.view === 'shop') return renderShop();
-  if (r.view === 'memories') return renderMemories();
-  if (r.view === 'circle') return renderCircleSettings();
-  return renderFamily();
-}
-
-function renderAccountButton() {
-  const btn = $('#account-btn');
-  btn.hidden = !state.user;
-  if (!state.user) return;
-  const p = state.profile || state.user;
-  btn.innerHTML = `${avatarHTML(p, 'sm')}<span class="account-name">${esc(firstName(p.name))}</span>`;
-  btn.setAttribute('aria-label', 'Account and circles');
+  switch (r.view) {
+    case 'join': return renderJoin(r.code);
+    case 'circle': return renderCircle(r.cid);
+    case 'settings': return renderSettings(r.cid);
+    case 'mine': return renderMine();
+    case 'shop': return renderShop();
+    case 'profile': return renderProfile(me());
+    case 'person': return r.uid === me() ? go('#profile') : renderProfile(r.uid);
+    case 'list': return r.uid === me() ? go('#mine') : renderList(r.uid);
+    default: return renderCircles();
+  }
 }
 
 // ----- signed out -----
@@ -396,12 +419,10 @@ function renderLanding(r) {
   });
 }
 
-// ----- first time / no circle yet -----
+// ----- circles tab -----
 function pendingCardsHTML() {
-  if (!state.pending.length) return '';
   return state.pending.map((p) => {
-    const s = state.pendingStatus[p.cid];
-    if (s === 'gone') {
+    if (state.pendingStatus[p.cid] === 'gone') {
       return `<div class="banner banner-warn"><span>Your request to join <strong>${esc(p.name)}</strong> wasn't approved.</span>
         <button type="button" class="btn btn-ghost small" data-dismiss="${esc(p.cid)}">Dismiss</button></div>`;
     }
@@ -417,66 +438,112 @@ function bindPendingDismiss(root) {
   }));
 }
 
-function renderOnboarding() {
+function avatarStackHTML(members) {
+  const shown = members.slice(0, 5);
+  const more = members.length - shown.length;
+  return `<span class="avatar-stack">${shown.map((m) => avatarHTML(personOf(m.id).name ? personOf(m.id) : m, 'sm')).join('')}${more > 0 ? `<span class="avatar avatar-sm avatar-more">+${more}</span>` : ''}</span>`;
+}
+
+function renderCircles() {
   const name = firstName(state.profile?.name || state.user.name);
+  const has = state.circleIds.length > 0;
   view().innerHTML = `
-    <section class="onboard">
+    <section class="circles">
       <div class="hero" ${enterAttr()}>
-        <h1 class="enter-1">Hi ${esc(name)}!</h1>
-        <p class="tagline enter-2">Start a circle for your family, or join one you were invited to.</p>
+        <h1 class="enter-1">${has ? 'Your circles' : `Hi ${esc(name)}!`}</h1>
+        ${has ? `<div class="countdown enter-2">${countdownHTML()}</div>`
+          : '<p class="tagline enter-2">Start a circle for your family, or join one you were invited to.</p>'}
       </div>
       ${state.setupError ? `<div class="banner banner-warn">Account setup hit a problem (${esc(state.setupError)}). If this keeps happening, the database rules may not be published yet.</div>` : ''}
       ${pendingCardsHTML()}
-      <div class="panel">
-        <div class="panel-head"><h3>Start a circle</h3></div>
-        <form id="create-form" class="form form-inline">
-          <label>Circle name
-            <input name="name" required maxlength="40" placeholder="e.g. Markwell Family">
-          </label>
-          <button type="submit" class="btn btn-primary">Create circle</button>
-        </form>
-        <p class="muted small">You'll be its admin and get an invite link to send to family.</p>
-      </div>
-      <div class="panel">
-        <div class="panel-head"><h3>Have an invite link?</h3></div>
-        <form id="paste-form" class="form form-inline">
-          <label>Paste it here
-            <input name="link" required placeholder="https://…#join-…" autocomplete="off">
-          </label>
-          <button type="submit" class="btn btn-secondary">Open invite</button>
-        </form>
+      <div class="circle-grid">
+        ${state.circleIds.map((cid) => {
+          const c = state.circles[cid];
+          const active = activeIn(cid);
+          const waiting = isAdminOf(cid) ? pendingIn(cid).length : 0;
+          return `
+            <a class="circle-card" href="#circle-${esc(cid)}">
+              <span class="circle-card-top">
+                <span class="circle-name">${c ? esc(c.name) : '<span class="muted">Loading…</span>'}</span>
+                ${isCreatorOf(cid) ? '<span class="pill pill-green">Creator</span>' : isAdminOf(cid) ? '<span class="pill pill-green">Admin</span>' : ''}
+              </span>
+              ${avatarStackHTML(active)}
+              <span class="person-meta">${active.length} member${active.length === 1 ? '' : 's'}</span>
+              ${waiting ? `<span class="pill pill-gold">🎟️ ${waiting} waiting to join</span>` : ''}
+              <span class="circle-open">Open →</span>
+            </a>`;
+        }).join('')}
+        <button type="button" class="circle-card circle-action" id="start-circle">
+          <span class="avatar avatar-md avatar-ghost" aria-hidden="true">＋</span>
+          <span class="circle-name">Start a circle</span>
+          <span class="person-meta">For family, friends, in-laws…</span>
+        </button>
+        <button type="button" class="circle-card circle-action" id="join-circle">
+          <span class="avatar avatar-md avatar-ghost" aria-hidden="true">🎟️</span>
+          <span class="circle-name">Join with a link</span>
+          <span class="person-meta">Paste an invite you were sent</span>
+        </button>
       </div>
     </section>`;
   bindPendingDismiss(view());
-  $('#create-form').addEventListener('submit', (e) => createCircleFromForm(e));
+  $('#start-circle').addEventListener('click', openCreateCircle);
+  $('#join-circle').addEventListener('click', openJoinWithLink);
+}
+
+function openCreateCircle() {
+  openModal(`
+    <h2>Start a circle 🎄</h2>
+    <p class="muted">You'll be its creator and admin, and get an invite link to send out.</p>
+    <form id="create-form" class="form">
+      <label>Circle name
+        <input name="name" required maxlength="40" placeholder="e.g. Markwell Family">
+      </label>
+      <div class="form-actions">
+        <button type="button" class="btn btn-ghost" data-close>Cancel</button>
+        <button type="submit" class="btn btn-primary">Create circle</button>
+      </div>
+    </form>`);
+  $('#create-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const name = String(new FormData(e.target).get('name') || '').trim();
+    if (!name) return;
+    const btn = e.target.querySelector('[type=submit]');
+    btn.disabled = true;
+    btn.textContent = 'Creating…';
+    try {
+      const { id, code } = await state.store.createCircle({ ...state.user, name: state.profile?.name || state.user.name }, name);
+      closeModal();
+      go(`#circle-${id}`);
+      showCircleReady(name, code, id);
+    } catch (err) {
+      oops(err);
+      btn.disabled = false;
+      btn.textContent = 'Create circle';
+    }
+  });
+}
+
+function openJoinWithLink() {
+  openModal(`
+    <h2>Join a circle 🎟️</h2>
+    <p class="muted">Paste the invite link someone sent you.</p>
+    <form id="paste-form" class="form">
+      <label>Invite link
+        <input name="link" required placeholder="https://…#join-…" autocomplete="off">
+      </label>
+      <div class="form-actions">
+        <button type="button" class="btn btn-ghost" data-close>Cancel</button>
+        <button type="submit" class="btn btn-primary">Open invite</button>
+      </div>
+    </form>`);
   $('#paste-form').addEventListener('submit', (e) => {
     e.preventDefault();
     const raw = String(new FormData(e.target).get('link') || '').trim();
     const code = (raw.match(/join-([a-z0-9]+)/i) || [])[1] || (/^[a-z0-9]{8,}$/i.test(raw) ? raw : '');
     if (!code) { toast('That doesn’t look like an invite link.'); return; }
+    closeModal();
     go(`#join-${code}`);
   });
-}
-
-async function createCircleFromForm(e) {
-  e.preventDefault();
-  const name = String(new FormData(e.target).get('name') || '').trim();
-  if (!name) return;
-  const btn = e.target.querySelector('[type=submit]');
-  const label = btn.textContent;
-  btn.disabled = true;
-  btn.textContent = 'Creating…';
-  try {
-    const { id, code } = await state.store.createCircle({ ...state.user, name: state.profile?.name || state.user.name }, name);
-    state.cid = id;
-    ls.set('jc.circle', id);
-    go('#family');
-    showCircleReady(name, code);
-  } catch (err) {
-    oops(err);
-    btn.disabled = false;
-    btn.textContent = label;
-  }
 }
 
 function showCircleReady(name, code) {
@@ -485,12 +552,12 @@ function showCircleReady(name, code) {
     <div class="celebrate">
       <div class="empty-emoji" aria-hidden="true">🎄</div>
       <h2>${esc(name)} is ready!</h2>
-      <p class="muted">You're its admin. Two things to do next:</p>
+      <p class="muted">You're its creator and admin. Two things to do next:</p>
     </div>
     <ol class="next-steps">
       <li>
         <strong>Invite your family</strong>
-        <span class="muted small">Send them this link. They sign in and ask to join, and you let them in.</span>
+        <span class="muted small">Text them this link. They sign in and ask to join, and you let them in.</span>
         <div class="invite-box">
           <input id="ready-link" readonly value="${esc(link)}" aria-label="Invite link">
           <button type="button" class="btn btn-primary" id="ready-copy">Copy</button>
@@ -498,22 +565,14 @@ function showCircleReady(name, code) {
       </li>
       <li>
         <strong>Add your wishes and sizes</strong>
-        <span class="muted small">On the My list tab.</span>
+        <span class="muted small">On the My list and Profile tabs.</span>
       </li>
     </ol>
     <div class="form-actions">
       <button type="button" class="btn btn-ghost" data-close>Later</button>
       <button type="button" class="btn btn-secondary" id="ready-mine">Go to My list</button>
     </div>`);
-  $('#ready-copy').addEventListener('click', async () => {
-    try {
-      await navigator.clipboard.writeText(link);
-      toast('🔗 Copied. Send it to family!');
-    } catch {
-      $('#ready-link').select();
-      toast('Select and copy the link.');
-    }
-  });
+  $('#ready-copy').addEventListener('click', () => copyText(link, '🔗 Copied. Text it to family!'));
   $('#ready-mine').addEventListener('click', () => { closeModal(); go('#mine'); });
 }
 
@@ -529,23 +588,23 @@ async function renderJoin(code) {
   if (!inv) {
     body = `<div class="empty-emoji">🧐</div><h2>That invite link doesn't work</h2>
       <p class="muted">It may have been replaced with a new one. Ask whoever sent it for the latest link.</p>
-      <a class="btn btn-ghost" href="#family">Go back</a>`;
+      <a class="btn btn-ghost" href="#circles">Go to my circles</a>`;
   } else if (state.circleIds.includes(inv.circleId)) {
     body = `<div class="empty-emoji">🎄</div><h2>You're already in ${esc(inv.circleName)}</h2>
-      <button type="button" class="btn btn-primary" id="open-circle">Open it</button>`;
+      <a class="btn btn-primary" href="#circle-${esc(inv.circleId)}">Open it</a>`;
   } else if (state.pending.some((p) => p.cid === inv.circleId)) {
     body = `<div class="empty-emoji">⏳</div><h2>Request sent</h2>
       <p class="muted">An admin of ${esc(inv.circleName)} will let you in soon.</p>
-      <a class="btn btn-ghost" href="#family">OK</a>`;
+      <a class="btn btn-ghost" href="#circles">OK</a>`;
   } else {
     body = `<div class="empty-emoji">🎟️</div><h2>Join ${esc(inv.circleName)}?</h2>
-      <p class="muted">You'll see everyone's wishlists and sizes once an admin lets you in. They'll see yours.</p>
+      <p class="muted">Once an admin lets you in, you'll see everyone's profiles and wishlists, and they'll see yours.</p>
       <button type="button" class="btn btn-primary" id="ask-join">Ask to join</button>`;
   }
   view().innerHTML = `<section class="locked">${body}</section>`;
-  $('#open-circle')?.addEventListener('click', () => { switchCircle(inv.circleId); go('#family'); });
   $('#ask-join')?.addEventListener('click', async (e) => {
-    e.currentTarget.disabled = true;
+    const btn = e.currentTarget;
+    btn.disabled = true;
     try {
       await state.store.requestJoin({ ...state.user, name: state.profile?.name || state.user.name, photoURL: state.profile?.photoURL || state.user.photoURL }, inv);
       state.pending.push({ cid: inv.circleId, name: inv.circleName });
@@ -555,64 +614,68 @@ async function renderJoin(code) {
       render();
     } catch (err) {
       oops(err);
-      e.currentTarget.disabled = false;
+      btn.disabled = false;
     }
   });
 }
 
-function switchCircle(cid) {
-  if (!state.circleIds.includes(cid)) return;
-  openCircle(cid);
+// ----- one circle: members and memories -----
+function notInCircle() {
+  view().innerHTML = `<section class="locked"><div class="empty-emoji">🤷</div><h2>You're not in that circle</h2>
+    <a class="btn btn-ghost" href="#circles">Back to my circles</a></section>`;
 }
 
-// ----- family -----
-function renderFamily() {
-  const c = circle();
-  const people = activeMembers().sort((a, b) => (a.id === me() ? -1 : b.id === me() ? 1 : a.name.localeCompare(b.name)));
-  const waiting = pendingMembers();
+function renderCircle(cid) {
+  if (!state.circleIds.includes(cid)) return notInCircle();
+  const c = state.circles[cid];
+  const members = activeIn(cid).sort((a, b) => (a.id === me() ? -1 : b.id === me() ? 1 : a.name.localeCompare(b.name)));
+  const waiting = isAdminOf(cid) ? pendingIn(cid).length : 0;
+  const memories = state.circleMemories[cid];
   view().innerHTML = `
-    <section class="family">
-      <div class="hero" ${enterAttr()}>
-        <h1 class="enter-1">${c ? esc(c.name) : '<span class="muted">Loading…</span>'}</h1>
-        <div class="countdown enter-2">${countdownHTML()}</div>
+    <section class="page">
+      <a class="back-link" href="#circles">← Circles</a>
+      <div class="circle-head">
+        <h1>${c ? esc(c.name) : '…'}</h1>
+        <p class="muted">${members.length} member${members.length === 1 ? '' : 's'}</p>
+        <div class="circle-actions">
+          <button type="button" class="btn btn-primary" id="invite">🔗 Copy invite link</button>
+          <a class="btn btn-ghost" href="#settings-${esc(cid)}">⚙️ Settings</a>
+        </div>
       </div>
-      ${state.circleIds.length > 1 ? `
-        <div class="chips" role="group" aria-label="Switch circle">
-          ${state.circleIds.map((id) => `<button type="button" class="chip ${id === state.cid ? 'active' : ''}" data-circle="${esc(id)}" aria-pressed="${id === state.cid}">${esc(state.circles[id]?.name || '…')}</button>`).join('')}
-        </div>` : ''}
-      ${pendingCardsHTML()}
-      ${isAdmin() && waiting.length ? `
-        <a class="banner banner-action" href="#circle">
-          <span>🎟️ <strong>${waiting.length}</strong> ${waiting.length === 1 ? 'person wants' : 'people want'} to join</span>
+      ${waiting ? `
+        <a class="banner banner-action" href="#settings-${esc(cid)}">
+          <span>🎟️ <strong>${waiting}</strong> ${waiting === 1 ? 'person wants' : 'people want'} to join</span>
           <span class="banner-cta">Review →</span>
         </a>` : ''}
-      ${state.members === null ? '<p class="loading">Gathering the family…</p>' : `
-      <div class="people">
-        ${people.map(personCardHTML).join('')}
-        <button type="button" class="person-card person-invite" id="invite-card">
-          <span class="avatar avatar-md avatar-ghost" aria-hidden="true">＋</span>
-          <span class="person-name">Invite family</span>
-          <span class="person-meta">Copy the invite link</span>
-        </button>
-      </div>`}
+
+      <h2 class="section-title">Members</h2>
+      <div class="people">${members.map(personCardHTML).join('')}</div>
+
+      <div class="memories-head">
+        <h2 class="section-title">Memories</h2>
+        <button type="button" class="btn btn-primary" id="add-memory">＋ Add a memory</button>
+      </div>
+      ${memories == null ? '<p class="loading">Opening the scrapbook…</p>' : memoriesGridHTML(memories, 'No memories yet. Add the first photo and start the scrapbook.')}
     </section>`;
-  view().querySelectorAll('[data-circle]').forEach((b) => b.addEventListener('click', () => switchCircle(b.dataset.circle)));
-  bindPendingDismiss(view());
-  $('#invite-card')?.addEventListener('click', () => copyInvite());
+  $('#invite').addEventListener('click', () => (c?.inviteCode
+    ? copyText(inviteLink(c.inviteCode), '🔗 Invite link copied. Text it to family!')
+    : go(`#settings-${cid}`)));
+  $('#add-memory').addEventListener('click', () => openAddMemory({ type: 'circle', cid }));
+  bindMemoriesGrid(memories || [], { type: 'circle', cid });
 }
 
 function personCardHTML(m) {
   const mine = m.id === me();
+  const p = personOf(m.id).name ? personOf(m.id) : m;
   const items = state.items[m.id];
   const claims = state.claims[m.id] || {};
-  const p = state.profiles[m.id] || m;
   const n = items ? items.length : 0;
   const claimed = items ? items.filter((i) => claims[i.id]).length : 0;
   const bday = daysUntilBirthday(state.profiles[m.id]?.birthday);
   let meta = items == null ? '…' : `${n} wish${n === 1 ? '' : 'es'}`;
   if (!mine && n) meta += ` · ${claimed} claimed`;
   return `
-    <a class="person-card" href="${mine ? '#mine' : `#person-${encodeURIComponent(m.id)}`}">
+    <a class="person-card" href="${profileHref(m.id)}">
       ${avatarHTML(p, 'md')}
       <span class="person-name">${esc(firstName(p.name))}${mine ? ' <span class="muted">(you)</span>' : ''}</span>
       <span class="person-meta">${esc(meta)}</span>
@@ -621,16 +684,411 @@ function personCardHTML(m) {
     </a>`;
 }
 
-async function copyInvite() {
-  const c = circle();
-  if (!c?.inviteCode) { go('#circle'); return; }
-  const link = inviteLink(c.inviteCode);
-  try {
-    await navigator.clipboard.writeText(link);
-    toast('🔗 Invite link copied. Send it to family!');
-  } catch {
-    go('#circle');
+// ----- circle settings -----
+function renderSettings(cid) {
+  if (!state.circleIds.includes(cid)) return notInCircle();
+  const c = state.circles[cid];
+  if (!c) { view().innerHTML = '<p class="loading">Opening settings…</p>'; return; }
+  const admin = isAdminOf(cid);
+  const creator = isCreatorOf(cid);
+  const waiting = pendingIn(cid);
+  const members = activeIn(cid).sort((a, b) => a.name.localeCompare(b.name));
+  view().innerHTML = `
+    <section class="page settings">
+      <a class="back-link" href="#circle-${esc(cid)}">← ${esc(c.name)}</a>
+      <h2 class="section-title">${esc(c.name)} settings</h2>
+
+      <div class="panel">
+        <div class="panel-head"><h3>Invite link</h3></div>
+        <p class="muted small">Anyone with this link can ask to join. An admin lets them in.</p>
+        <div class="invite-box">
+          <input id="invite-link" readonly value="${esc(c.inviteCode ? inviteLink(c.inviteCode) : '')}" aria-label="Invite link">
+          <button type="button" class="btn btn-primary" id="copy-invite">Copy</button>
+        </div>
+        ${admin ? `<button type="button" class="btn btn-ghost small wrap" id="new-invite">Make a new link (old one stops working)</button>` : ''}
+      </div>
+
+      ${admin ? `
+      <div class="panel">
+        <div class="panel-head"><h3>Waiting to join</h3><span class="muted small">${waiting.length}</span></div>
+        ${waiting.length ? `<ul class="member-list">${waiting.map((m) => `
+          <li>
+            ${avatarHTML(m, 'sm')}
+            <span class="member-name">${esc(m.name)}</span>
+            <span class="member-actions">
+              <button type="button" class="btn btn-ghost small" data-decline="${esc(m.id)}">Decline</button>
+              <button type="button" class="btn btn-primary small" data-approve="${esc(m.id)}">Let in</button>
+            </span>
+          </li>`).join('')}</ul>` : '<p class="panel-text muted">No one is waiting.</p>'}
+      </div>` : ''}
+
+      <div class="panel">
+        <div class="panel-head"><h3>Members</h3><span class="muted small">${members.length}</span></div>
+        <ul class="member-list">${members.map((m) => `
+          <li>
+            <a class="member-link" href="${profileHref(m.id)}">${avatarHTML(personOf(m.id).name ? personOf(m.id) : m, 'sm')}
+              <span class="member-name">${esc(m.name)}${m.id === me() ? ' <span class="muted">(you)</span>' : ''}</span></a>
+            ${c.createdBy === m.id ? '<span class="pill pill-green">Creator</span>' : m.role === 'admin' ? '<span class="pill pill-green">Admin</span>' : ''}
+            ${admin && m.id !== me() && c.createdBy !== m.id ? `
+              <span class="member-actions">
+                <button type="button" class="btn btn-ghost small" data-role="${esc(m.id)}">${m.role === 'admin' ? 'Make member' : 'Make admin'}</button>
+                <button type="button" class="btn btn-danger small" data-remove="${esc(m.id)}">Remove</button>
+              </span>` : ''}
+          </li>`).join('')}</ul>
+      </div>
+
+      ${admin ? `
+      <div class="panel">
+        <div class="panel-head"><h3>Circle name</h3></div>
+        <form id="rename-form" class="form form-inline">
+          <label>Name<input name="name" required maxlength="40" value="${esc(c.name)}"></label>
+          <button type="submit" class="btn btn-secondary">Rename</button>
+        </form>
+      </div>` : ''}
+
+      <div class="panel panel-danger">
+        <div class="panel-head"><h3>${creator ? 'Disband circle' : 'Leave circle'}</h3></div>
+        ${creator
+          ? `<p class="panel-text muted small">Deletes ${esc(c.name)} for everyone, including its shared memories. Wishlists and profiles aren't touched. Members can save photos to their profiles first.</p>
+             <button type="button" class="btn btn-danger" id="disband">Disband ${esc(c.name)}</button>`
+          : `<p class="panel-text muted small">You'll stop seeing this circle's profiles, lists and memories, and they'll stop seeing yours. You can rejoin with an invite link.</p>
+             <button type="button" class="btn btn-danger" id="leave">Leave ${esc(c.name)}</button>`}
+      </div>
+    </section>`;
+
+  $('#copy-invite').addEventListener('click', () => copyText($('#invite-link').value, '🔗 Copied. Text it to family!'));
+  $('#new-invite')?.addEventListener('click', async () => {
+    if (!(await askConfirm('Make a new invite link?', 'The current link will stop working. People already waiting stay on the list.', 'Make new link'))) return;
+    try { await state.store.newInvite(state.user, { ...c, id: cid }); toast('🔗 New link ready. The old one no longer works.'); } catch (err) { oops(err); }
+  });
+  view().querySelectorAll('[data-approve]').forEach((b) => b.addEventListener('click', async () => {
+    b.disabled = true;
+    try { await state.store.approve(cid, b.dataset.approve); toast('🎉 Welcome to the circle!'); } catch (err) { oops(err); b.disabled = false; }
+  }));
+  view().querySelectorAll('[data-decline]').forEach((b) => b.addEventListener('click', async () => {
+    try { await state.store.removeMember(cid, b.dataset.decline, false); } catch (err) { oops(err); }
+  }));
+  view().querySelectorAll('[data-role]').forEach((b) => b.addEventListener('click', async () => {
+    const m = membersOf(cid).find((x) => x.id === b.dataset.role);
+    try { await state.store.setRole(cid, m.id, m.role === 'admin' ? 'member' : 'admin'); } catch (err) { oops(err); }
+  }));
+  view().querySelectorAll('[data-remove]').forEach((b) => b.addEventListener('click', async () => {
+    const m = membersOf(cid).find((x) => x.id === b.dataset.remove);
+    if (!(await askConfirm(`Remove ${m.name}?`, `${firstName(m.name)} won't see this circle anymore, and its members won't see ${firstName(m.name)}'s lists unless you share another circle.`, 'Remove'))) return;
+    try { await state.store.removeMember(cid, m.id, true); toast(`${firstName(m.name)} was removed`); } catch (err) { oops(err); }
+  }));
+  $('#rename-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const name = String(new FormData(e.target).get('name') || '').trim();
+    if (!name) return;
+    try { await state.store.renameCircle(cid, name); toast('✅ Renamed'); } catch (err) { oops(err); }
+  });
+  $('#leave')?.addEventListener('click', async () => {
+    if (!(await askConfirm(`Leave ${c.name}?`, 'You can rejoin later with an invite link.', 'Leave'))) return;
+    try { await state.store.removeMember(cid, me(), true); go('#circles'); toast(`You left ${c.name}`); } catch (err) { oops(err); }
+  });
+  $('#disband')?.addEventListener('click', async () => {
+    if (!(await askConfirm(`Disband ${c.name}?`, `This deletes the circle and its ${(state.circleMemories[cid] || []).length} shared memories for all ${members.length} members. It can't be undone.`, 'Disband for everyone'))) return;
+    try {
+      toast('Disbanding…');
+      await state.store.disbandCircle(cid, {
+        uid: me(), members: membersOf(cid), memories: state.circleMemories[cid] || [], inviteCode: c.inviteCode,
+      });
+      go('#circles');
+      toast(`${c.name} was disbanded`);
+    } catch (err) { oops(err); }
+  });
+}
+
+// ----- memories (circle scrapbooks and profiles) -----
+function memoriesGridHTML(list, emptyText) {
+  if (!list.length) return `<div class="empty"><div class="empty-emoji">📷</div><p>${esc(emptyText)}</p></div>`;
+  const byYear = list.reduce((acc, m) => {
+    const y = Number(m.year) || 'Undated';
+    (acc[y] ||= []).push(m);
+    return acc;
+  }, {});
+  return Object.keys(byYear).sort((a, b) => (Number(b) || 0) - (Number(a) || 0)).map((y) => `
+    <h3 class="year-title"><span>${esc(y)}</span></h3>
+    <div class="polaroids">
+      ${byYear[y].sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0)).map((m) => `
+        <figure class="polaroid" data-mem="${esc(m.id)}" tabindex="0" role="button" aria-label="Open photo: ${esc(m.caption || 'memory')}">
+          <img src="${safeImg(m.image)}" alt="${esc(m.caption || 'Memory')}" loading="lazy">
+          <figcaption>${esc(m.caption || '')}</figcaption>
+        </figure>`).join('')}
+    </div>`).join('');
+}
+
+function bindMemoriesGrid(list, ctx) {
+  view().querySelectorAll('.polaroid[data-mem]').forEach((el) => {
+    const open = () => { const m = list.find((x) => String(x.id) === el.dataset.mem); if (m) openLightbox(m, ctx); };
+    el.addEventListener('click', open);
+    el.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } });
+  });
+}
+
+function openLightbox(m, ctx) {
+  const inCircle = ctx.type === 'circle';
+  const source = inCircle ? `${ctx.cid}/${m.id}` : '';
+  const saved = inCircle && (state.profileMemories[me()] || []).some((x) => x.source === source);
+  const canDelete = inCircle ? (m.by === me() || isAdminOf(ctx.cid)) : ctx.uid === me();
+  openModal(`
+    <figure class="lightbox">
+      <img src="${safeImg(m.image)}" alt="${esc(m.caption || 'Memory')}">
+      <figcaption>
+        <strong>${esc(m.year || '')}</strong> ${esc(m.caption || '')}
+        ${m.byName ? `<br><span class="muted small">Added by ${esc(firstName(m.byName))}</span>` : ''}
+        ${m.from ? `<br><span class="muted small">Saved from ${esc(m.from)}</span>` : ''}
+      </figcaption>
+    </figure>
+    <div class="form-actions">
+      ${canDelete ? `<button type="button" class="btn btn-danger small" id="del-memory">Delete</button>` : ''}
+      <span class="spacer"></span>
+      ${inCircle ? (saved
+        ? '<span class="pill pill-green">✓ On your profile</span>'
+        : '<button type="button" class="btn btn-secondary" id="save-memory">⭐ Save to my profile</button>') : ''}
+    </div>`, { wide: true });
+  $('#save-memory')?.addEventListener('click', async (e) => {
+    e.currentTarget.disabled = true;
+    try {
+      await state.store.addProfileMemory(me(), {
+        image: m.image, caption: m.caption || '', year: m.year || null,
+        from: state.circles[ctx.cid]?.name || '', source, by: me(), byName: state.profile?.name || state.user.name,
+      });
+      closeModal();
+      toast('⭐ Saved to your profile');
+    } catch (err) { oops(err); }
+  });
+  $('#del-memory')?.addEventListener('click', async () => {
+    const where = inCircle ? 'for everyone in the circle' : 'from your profile';
+    if (!(await askConfirm('Delete this memory?', `This photo will be removed ${where}.`, 'Delete'))) return;
+    try {
+      if (inCircle) await state.store.deleteMemory(ctx.cid, m.id);
+      else await state.store.deleteProfileMemory(me(), m.id);
+      closeModal();
+      toast('🗑️ Memory deleted');
+    } catch (err) { oops(err); }
+  });
+}
+
+function openAddMemory(target) {
+  const year = new Date().getFullYear();
+  const where = target.type === 'circle' ? (state.circles[target.cid]?.name || 'the circle') : 'your profile';
+  openModal(`
+    <h2>Add a memory 📸</h2>
+    <p class="muted">Posts to ${esc(where)}.</p>
+    <form id="memory-form" class="form">
+      <label>Photo
+        <input name="file" type="file" accept="image/*" required>
+      </label>
+      <div class="form-row">
+        <label>Year
+          <input name="year" type="number" inputmode="numeric" min="1950" max="${year + 1}" value="${year}" required>
+        </label>
+        <label>Caption
+          <input name="caption" maxlength="140" placeholder="e.g. Cookie marathon">
+        </label>
+      </div>
+      <p class="form-error" id="mem-error" hidden></p>
+      <div class="form-actions">
+        <button type="button" class="btn btn-ghost" data-close>Cancel</button>
+        <button type="submit" class="btn btn-primary">Post memory</button>
+      </div>
+    </form>`);
+  $('#memory-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const file = fd.get('file');
+    const err = $('#mem-error');
+    const submit = e.target.querySelector('[type=submit]');
+    try {
+      if (!file || !file.size) throw new Error('Pick a photo first.');
+      submit.disabled = true;
+      submit.textContent = 'Posting…';
+      const memory = {
+        year: Number(fd.get('year')),
+        caption: String(fd.get('caption') || '').trim(),
+        image: await shrinkImage(file, CONFIG.memoryMaxSize),
+        by: me(),
+        byName: state.profile?.name || state.user.name,
+      };
+      if (target.type === 'circle') await state.store.addMemory(target.cid, memory);
+      else await state.store.addProfileMemory(me(), memory);
+      closeModal();
+      toast('📸 Memory posted!');
+    } catch (ex) {
+      console.error(ex);
+      err.textContent = ex.code === 'permission-denied' ? 'Not allowed to add photos here.' : ex.message || 'Could not save that photo.';
+      err.hidden = false;
+      submit.disabled = false;
+      submit.textContent = 'Post memory';
+    }
+  });
+}
+
+// ----- profiles (yours and everyone else's) -----
+function renderProfile(uid) {
+  const mine = uid === me();
+  if (!mine && !people().includes(uid)) {
+    view().innerHTML = `<section class="locked"><div class="empty-emoji">🤷</div><h2>You don't share a circle with them</h2>
+      <a class="btn btn-ghost" href="#circles">Back to my circles</a></section>`;
+    return;
   }
+  const p = mine ? (state.profile || state.user) : personOf(uid);
+  const items = state.items[uid];
+  const n = items ? items.length : 0;
+  const memories = state.profileMemories[uid];
+  const circles = sharedCircles(uid).map((cid) => state.circles[cid]?.name).filter(Boolean);
+  const myCircles = mine ? state.circleIds.map((cid) => state.circles[cid]?.name).filter(Boolean) : circles;
+  const bday = birthdayText(p.birthday);
+  const until = daysUntilBirthday(p.birthday);
+  view().innerHTML = `
+    <section class="page profile-page">
+      ${mine ? '' : `<a class="back-link" href="javascript:history.back()">← Back</a>`}
+      <div class="profile-card">
+        ${avatarHTML(p, 'xl')}
+        <h1>${esc(p.name || 'Someone')}</h1>
+        <p class="profile-meta">
+          ${bday ? `<span>🎂 ${esc(bday)}${until != null && until <= 45 ? ` <span class="pill pill-gold">${until === 0 ? 'today!' : `in ${until} days`}</span>` : ''}</span>` : ''}
+          ${myCircles.length ? `<span>🎄 ${esc(myCircles.join(' · '))}</span>` : ''}
+          ${mine ? `<span>${p.visibility === 'public' ? '🌍 Public profile' : '🔒 Only your circles'}</span>` : ''}
+        </p>
+        <div class="profile-actions">
+          ${mine
+            ? `<button type="button" class="btn btn-primary" id="edit-profile">✏️ Edit profile</button>
+               <a class="btn btn-ghost" href="#mine">🎁 My wishlist (${n})</a>`
+            : `<a class="btn btn-primary" href="#list-${encodeURIComponent(uid)}">🎁 View wishlist${items ? ` (${n})` : ''}</a>`}
+        </div>
+      </div>
+
+      <div class="profile">${profilePanelsHTML(p, { compact: !mine })}</div>
+
+      <div class="memories-head">
+        <h2 class="section-title">${mine ? 'My memories' : `${esc(firstName(p.name))}'s memories`}</h2>
+        ${mine ? '<button type="button" class="btn btn-primary" id="post-memory">＋ Post a memory</button>' : ''}
+      </div>
+      ${memories == null ? '<p class="loading">Loading…</p>' : memoriesGridHTML(memories,
+        mine ? 'Post a photo here, or tap ⭐ Save to my profile on any circle memory.' : 'No memories on this profile yet.')}
+
+      ${mine ? '<button type="button" class="btn btn-ghost sign-out" id="sign-out">👋 Sign out</button>' : ''}
+    </section>`;
+  $('#edit-profile')?.addEventListener('click', openProfileEditor);
+  $('#post-memory')?.addEventListener('click', () => openAddMemory({ type: 'profile' }));
+  $('#sign-out')?.addEventListener('click', async () => { await state.store.signOut(); go('#circles'); });
+  view().querySelector('.back-link')?.addEventListener('click', (e) => {
+    if (history.length <= 1) { e.preventDefault(); go('#circles'); }
+  });
+  bindMemoriesGrid(memories || [], { type: 'profile', uid });
+}
+
+// ----- my list -----
+function renderMine() {
+  const p = state.profile || state.user;
+  const items = state.items[me()] || [];
+  const canImport = !items.length && state.seedItems.length
+    && firstName(p.name).toLowerCase() === String(CONFIG.starterListFor || '').toLowerCase();
+  view().innerHTML = `
+    <section class="page">
+      <div class="page-head">
+        ${avatarHTML(p, 'lg')}
+        <div class="page-id">
+          <h2>My wishlist</h2>
+          <p class="muted">${items.length} wish${items.length === 1 ? '' : 'es'}</p>
+        </div>
+        <a class="btn btn-ghost" href="#profile">👤 My profile</a>
+      </div>
+      <p class="hint-line">🙈 You'll never see who claimed what on your list. That's the point!</p>
+      ${canImport ? `
+        <div class="banner banner-action">
+          <span>📋 Bring over your starter list (${state.seedItems.length} wishes)?</span>
+          <button type="button" class="btn btn-primary small" id="import-starter">Import</button>
+        </div>` : ''}
+      ${wishlistToolbarHTML(items, { owner: true })}
+    </section>`;
+  bindWishlist(me(), true);
+  $('#import-starter')?.addEventListener('click', async (e) => {
+    e.currentTarget.disabled = true;
+    try {
+      await state.store.saveItems(me(), state.seedItems.map((it, order) => ({ ...it, order })));
+      toast(`✨ Imported ${state.seedItems.length} wishes`);
+    } catch (err) { oops(err); }
+  });
+}
+
+// ----- someone else's wishlist -----
+function renderList(uid) {
+  if (!people().includes(uid)) {
+    view().innerHTML = `<section class="locked"><div class="empty-emoji">🤷</div><h2>You don't share a circle with them</h2>
+      <a class="btn btn-ghost" href="#circles">Back to my circles</a></section>`;
+    return;
+  }
+  const p = personOf(uid);
+  const items = state.items[uid];
+  view().innerHTML = `
+    <section class="page">
+      <a class="back-link" href="#person-${encodeURIComponent(uid)}">← ${esc(firstName(p.name))}'s profile</a>
+      <div class="page-head">
+        ${avatarHTML(p, 'lg')}
+        <div class="page-id">
+          <h2>${esc(firstName(p.name))}'s wishlist</h2>
+          <p class="muted">${items ? `${items.length} wish${items.length === 1 ? '' : 'es'}` : ''}</p>
+        </div>
+      </div>
+      ${items == null ? '<p class="loading">Opening the list…</p>' : wishlistToolbarHTML(items, { giver: true })}
+    </section>`;
+  if (items != null) bindWishlist(uid, false);
+}
+
+// ----- shopping -----
+function renderShop() {
+  const groups = [];
+  let total = 0;
+  let bought = 0;
+  for (const uid of people()) {
+    const claims = state.claims[uid] || {};
+    const ids = new Set((state.items[uid] || []).map((i) => i.id));
+    const rows = Object.entries(claims).filter(([, c]) => c.by === me()).map(([id, c]) => ({ id, c, removed: !ids.has(id) }));
+    if (!rows.length) continue;
+    total += rows.length;
+    bought += rows.filter((r) => r.c.purchased).length;
+    groups.push({ uid, rows });
+  }
+  groups.sort((a, b) => displayName(a.uid).localeCompare(displayName(b.uid)));
+  view().innerHTML = `
+    <section class="shop">
+      <h2 class="section-title">My shopping 🛷</h2>
+      <div class="stats">
+        <div class="stat"><span class="stat-num">${total}</span><span>claimed</span></div>
+        <div class="stat"><span class="stat-num">${bought}</span><span>bought</span></div>
+        <div class="stat"><span class="stat-num">${total - bought}</span><span>to buy</span></div>
+      </div>
+      ${groups.length ? groups.map(({ uid, rows }) => `
+        <h3 class="elf-name"><a href="#list-${encodeURIComponent(uid)}">${avatarHTML(personOf(uid), 'xs')} For ${esc(firstName(displayName(uid)))}</a></h3>
+        <ul class="shop-list">
+          ${rows.map(({ id, c, removed }) => `
+            <li class="shop-row ${c.purchased ? 'is-bought' : ''}">
+              <span class="row-emoji" aria-hidden="true">${esc(c.itemEmoji || '🎁')}</span>
+              <div class="row-main">
+                <strong>${esc(c.itemName || 'Gift')}</strong>
+                ${removed ? `<span class="row-note warn">⚠️ ${esc(firstName(displayName(uid)))} took this off their list</span>` : ''}
+                ${c.note ? `<span class="row-note">“${esc(c.note)}”</span>` : ''}
+              </div>
+              <button type="button" class="btn ${c.purchased ? 'btn-secondary' : 'btn-ghost'} small" data-bought="${esc(uid)}|${esc(id)}" aria-pressed="${!!c.purchased}">${c.purchased ? '✓ Bought' : 'Mark bought'}</button>
+              <button type="button" class="btn btn-ghost small" data-manage="${esc(uid)}|${esc(id)}" aria-label="Manage ${esc(c.itemName || 'gift')}">⋯</button>
+            </li>`).join('')}
+        </ul>`).join('')
+      : `<div class="empty"><div class="empty-emoji">🛍️</div><p>Nothing claimed yet. Open a <a href="#circles">circle</a>, pick someone, and claim a gift from their wishlist.</p></div>`}
+    </section>`;
+  view().querySelectorAll('[data-bought]').forEach((b) => b.addEventListener('click', async () => {
+    const [owner, id] = b.dataset.bought.split('|');
+    const c = state.claims[owner]?.[id];
+    if (!c) return;
+    try { await state.store.updateClaim(owner, id, { purchased: !c.purchased }); } catch (err) { oops(err); }
+  }));
+  view().querySelectorAll('[data-manage]').forEach((b) => b.addEventListener('click', () => {
+    const [owner, id] = b.dataset.manage.split('|');
+    openManage(owner, id);
+  }));
 }
 
 // ----- wishlist grid (shared by My list and person pages) -----
@@ -784,72 +1242,6 @@ function profilePanelsHTML(p, { compact = false } = {}) {
         ${PAYBACK_FIELDS.map(([k, label]) => `<div><dt>${label}</dt><dd>${pay[k] ? esc(pay[k]) : empty}</dd></div>`).join('')}
       </dl>
     </div>`;
-}
-
-// ----- my list -----
-function renderMine() {
-  const p = state.profile || state.user;
-  const items = state.items[me()] || [];
-  const canImport = !items.length && state.seedItems.length
-    && firstName(p.name).toLowerCase() === String(CONFIG.starterListFor || '').toLowerCase();
-  const bday = p.birthday ? new Date(`${p.birthday}T12:00:00`).toLocaleDateString(undefined, { month: 'long', day: 'numeric' }) : '';
-  view().innerHTML = `
-    <section class="page">
-      <div class="page-head">
-        ${avatarHTML(p, 'lg')}
-        <div class="page-id">
-          <h2>My wishlist</h2>
-          <p class="muted">${bday ? `🎂 ${esc(bday)} · ` : ''}${p.visibility === 'public' ? '🌍 Public profile' : '🔒 Only your circles'}</p>
-        </div>
-        <button type="button" class="btn btn-ghost" id="edit-profile">✏️ Sizes & profile</button>
-      </div>
-      <p class="hint-line">🙈 You'll never see who claimed what on your list. That's the point!</p>
-      ${canImport ? `
-        <div class="banner banner-action">
-          <span>📋 Bring over your starter list (${state.seedItems.length} wishes)?</span>
-          <button type="button" class="btn btn-primary small" id="import-starter">Import</button>
-        </div>` : ''}
-      ${wishlistToolbarHTML(items, { owner: true })}
-      <h3 class="section-title">Sizes & favorites</h3>
-      <div class="profile">${profilePanelsHTML(p)}</div>
-    </section>`;
-  bindWishlist(me(), true);
-  $('#edit-profile').addEventListener('click', openProfileEditor);
-  $('#import-starter')?.addEventListener('click', async (e) => {
-    e.currentTarget.disabled = true;
-    try {
-      await state.store.saveItems(me(), state.seedItems.map((it, order) => ({ ...it, order })));
-      toast(`✨ Imported ${state.seedItems.length} wishes`);
-    } catch (err) { oops(err); }
-  });
-}
-
-// ----- someone else's list -----
-function renderPerson(uid) {
-  const m = state.members?.find((x) => x.id === uid && x.status === 'active');
-  if (state.members && !m) {
-    view().innerHTML = `<section class="locked"><div class="empty-emoji">🤷</div><h2>Not in this circle</h2>
-      <a class="btn btn-ghost" href="#family">Back to family</a></section>`;
-    return;
-  }
-  const p = state.profiles[uid] || m || {};
-  const items = state.items[uid];
-  const bday = p.birthday ? new Date(`${p.birthday}T12:00:00`).toLocaleDateString(undefined, { month: 'long', day: 'numeric' }) : '';
-  view().innerHTML = `
-    <section class="page">
-      <a class="back-link" href="#family">← Family</a>
-      <div class="page-head">
-        ${avatarHTML(p, 'lg')}
-        <div class="page-id">
-          <h2>${esc(firstName(p.name))}'s wishlist</h2>
-          <p class="muted">${bday ? `🎂 ${esc(bday)}` : ''}</p>
-        </div>
-      </div>
-      ${items == null ? '<p class="loading">Opening the list…</p>' : wishlistToolbarHTML(items, { giver: true })}
-      <h3 class="section-title">Sizes & favorites</h3>
-      <div class="profile">${profilePanelsHTML(state.profiles[uid], { compact: true })}</div>
-    </section>`;
-  if (items != null) bindWishlist(uid, false);
 }
 
 // ----- item editor -----
@@ -1082,177 +1474,6 @@ function openManage(owner, itemId) {
   });
 }
 
-// ----- shopping -----
-function renderShop() {
-  const groups = [];
-  let total = 0;
-  let bought = 0;
-  for (const m of activeMembers()) {
-    if (m.id === me()) continue;
-    const claims = state.claims[m.id] || {};
-    const items = state.items[m.id] || [];
-    const ids = new Set(items.map((i) => i.id));
-    const rows = Object.entries(claims).filter(([, c]) => c.by === me()).map(([id, c]) => ({ id, c, removed: !ids.has(id) }));
-    if (!rows.length) continue;
-    total += rows.length;
-    bought += rows.filter((r) => r.c.purchased).length;
-    groups.push({ m, rows });
-  }
-  view().innerHTML = `
-    <section class="shop">
-      <h2 class="section-title">My shopping 🛷</h2>
-      <div class="stats">
-        <div class="stat"><span class="stat-num">${total}</span><span>claimed</span></div>
-        <div class="stat"><span class="stat-num">${bought}</span><span>bought</span></div>
-        <div class="stat"><span class="stat-num">${total - bought}</span><span>to buy</span></div>
-      </div>
-      ${groups.length ? groups.map(({ m, rows }) => `
-        <h3 class="elf-name">${avatarHTML(state.profiles[m.id] || m, 'xs')} For ${esc(firstName(displayName(m.id)))}</h3>
-        <ul class="shop-list">
-          ${rows.map(({ id, c, removed }) => `
-            <li class="shop-row ${c.purchased ? 'is-bought' : ''}">
-              <span class="row-emoji" aria-hidden="true">${esc(c.itemEmoji || '🎁')}</span>
-              <div class="row-main">
-                <strong>${esc(c.itemName || 'Gift')}</strong>
-                ${removed ? `<span class="row-note warn">⚠️ ${esc(firstName(displayName(m.id)))} took this off their list</span>` : ''}
-                ${c.note ? `<span class="row-note">“${esc(c.note)}”</span>` : ''}
-              </div>
-              <button type="button" class="btn ${c.purchased ? 'btn-secondary' : 'btn-ghost'} small" data-bought="${esc(m.id)}|${esc(id)}" aria-pressed="${!!c.purchased}">${c.purchased ? '✓ Bought' : 'Mark bought'}</button>
-              <button type="button" class="btn btn-ghost small" data-manage="${esc(m.id)}|${esc(id)}" aria-label="Manage ${esc(c.itemName || 'gift')}">⋯</button>
-            </li>`).join('')}
-        </ul>`).join('')
-      : `<div class="empty"><div class="empty-emoji">🛍️</div><p>Nothing claimed yet. Pick someone in <a href="#family">Family</a> and claim a gift.</p></div>`}
-    </section>`;
-  view().querySelectorAll('[data-bought]').forEach((b) => b.addEventListener('click', async () => {
-    const [owner, id] = b.dataset.bought.split('|');
-    const c = state.claims[owner]?.[id];
-    if (!c) return;
-    try { await state.store.updateClaim(owner, id, { purchased: !c.purchased }); } catch (err) { oops(err); }
-  }));
-  view().querySelectorAll('[data-manage]').forEach((b) => b.addEventListener('click', () => {
-    const [owner, id] = b.dataset.manage.split('|');
-    openManage(owner, id);
-  }));
-}
-
-// ----- circle settings -----
-function renderCircleSettings() {
-  const c = circle();
-  if (!c) {
-    view().innerHTML = '<p class="loading">Opening circle settings…</p>';
-    return;
-  }
-  const admin = isAdmin();
-  const waiting = pendingMembers();
-  const people = activeMembers().sort((a, b) => a.name.localeCompare(b.name));
-  view().innerHTML = `
-    <section class="page settings">
-      <a class="back-link" href="#family">← Family</a>
-      <h2 class="section-title">${esc(c?.name || 'Circle')} settings</h2>
-
-      <div class="panel">
-        <div class="panel-head"><h3>Invite link</h3></div>
-        <p class="muted small">Anyone with this link can ask to join. ${admin ? 'You' : 'An admin'} let${admin ? '' : 's'} them in.</p>
-        <div class="invite-box">
-          <input id="invite-link" readonly value="${esc(c?.inviteCode ? inviteLink(c.inviteCode) : '')}" aria-label="Invite link">
-          <button type="button" class="btn btn-primary" id="copy-invite">Copy</button>
-        </div>
-        ${admin ? `<button type="button" class="btn btn-ghost small wrap" id="new-invite">Make a new link (old one stops working)</button>` : ''}
-      </div>
-
-      ${admin ? `
-      <div class="panel">
-        <div class="panel-head"><h3>Waiting to join</h3><span class="muted small">${waiting.length}</span></div>
-        ${waiting.length ? `<ul class="member-list">${waiting.map((m) => `
-          <li>
-            ${avatarHTML(m, 'sm')}
-            <span class="member-name">${esc(m.name)}</span>
-            <button type="button" class="btn btn-ghost small" data-decline="${esc(m.id)}">Decline</button>
-            <button type="button" class="btn btn-primary small" data-approve="${esc(m.id)}">Let in</button>
-          </li>`).join('')}</ul>` : '<p class="panel-text muted">No one is waiting.</p>'}
-      </div>` : ''}
-
-      <div class="panel">
-        <div class="panel-head"><h3>Members</h3><span class="muted small">${people.length}</span></div>
-        <ul class="member-list">${people.map((m) => `
-          <li>
-            ${avatarHTML(state.profiles[m.id] || m, 'sm')}
-            <span class="member-name">${esc(m.name)}${m.id === me() ? ' <span class="muted">(you)</span>' : ''}</span>
-            ${m.role === 'admin' ? '<span class="pill pill-green">Admin</span>' : ''}
-            ${admin && m.id !== me() ? `
-              <button type="button" class="btn btn-ghost small" data-role="${esc(m.id)}">${m.role === 'admin' ? 'Make member' : 'Make admin'}</button>
-              <button type="button" class="btn btn-danger small" data-remove="${esc(m.id)}">Remove</button>` : ''}
-          </li>`).join('')}</ul>
-      </div>
-
-      ${admin ? `
-      <div class="panel">
-        <div class="panel-head"><h3>Circle name</h3></div>
-        <form id="rename-form" class="form form-inline">
-          <label>Name<input name="name" required maxlength="40" value="${esc(c?.name)}"></label>
-          <button type="submit" class="btn btn-secondary">Rename</button>
-        </form>
-      </div>` : ''}
-
-      <div class="panel">
-        <div class="panel-head"><h3>Start another circle</h3></div>
-        <form id="create-form" class="form form-inline">
-          <label>Circle name<input name="name" required maxlength="40" placeholder="e.g. Friendsmas"></label>
-          <button type="submit" class="btn btn-secondary">Create</button>
-        </form>
-      </div>
-
-      <button type="button" class="btn btn-danger" id="leave">Leave ${esc(c?.name || 'this circle')}</button>
-    </section>`;
-
-  $('#copy-invite').addEventListener('click', async () => {
-    const input = $('#invite-link');
-    try {
-      await navigator.clipboard.writeText(input.value);
-      toast('🔗 Copied. Send it to family!');
-    } catch {
-      input.select();
-      toast('Select and copy the link above.');
-    }
-  });
-  $('#new-invite')?.addEventListener('click', async () => {
-    if (!(await askConfirm('Make a new invite link?', 'The current link will stop working. People who already asked to join stay on the waiting list.', 'Make new link'))) return;
-    try { await state.store.newInvite(state.user, { ...c, id: state.cid }); toast('🔗 New link ready. The old one no longer works.'); } catch (err) { oops(err); }
-  });
-  view().querySelectorAll('[data-approve]').forEach((b) => b.addEventListener('click', async () => {
-    b.disabled = true;
-    try { await state.store.approve(state.cid, b.dataset.approve); toast('🎉 Welcome to the circle!'); } catch (err) { oops(err); b.disabled = false; }
-  }));
-  view().querySelectorAll('[data-decline]').forEach((b) => b.addEventListener('click', async () => {
-    try { await state.store.removeMember(state.cid, b.dataset.decline, false); } catch (err) { oops(err); }
-  }));
-  view().querySelectorAll('[data-role]').forEach((b) => b.addEventListener('click', async () => {
-    const m = state.members.find((x) => x.id === b.dataset.role);
-    try { await state.store.setRole(state.cid, m.id, m.role === 'admin' ? 'member' : 'admin'); } catch (err) { oops(err); }
-  }));
-  view().querySelectorAll('[data-remove]').forEach((b) => b.addEventListener('click', async () => {
-    const m = state.members.find((x) => x.id === b.dataset.remove);
-    if (!(await askConfirm(`Remove ${m.name}?`, `${firstName(m.name)} won't see this circle's lists anymore, and you won't see theirs.`, 'Remove'))) return;
-    try { await state.store.removeMember(state.cid, m.id, true); toast(`${firstName(m.name)} was removed`); } catch (err) { oops(err); }
-  }));
-  $('#rename-form')?.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const name = String(new FormData(e.target).get('name') || '').trim();
-    if (!name) return;
-    try { await state.store.renameCircle(state.cid, name); toast('✅ Renamed'); } catch (err) { oops(err); }
-  });
-  $('#create-form').addEventListener('submit', (e) => createCircleFromForm(e));
-  $('#leave').addEventListener('click', async () => {
-    const admins = activeMembers().filter((m) => m.role === 'admin');
-    if (admin && admins.length === 1 && people.length > 1) {
-      toast('Make someone else an admin first.');
-      return;
-    }
-    if (!(await askConfirm(`Leave ${c?.name || 'this circle'}?`, 'You will stop seeing its lists and memories, and they will stop seeing yours. You can rejoin with an invite link.', 'Leave'))) return;
-    try { await state.store.removeMember(state.cid, me(), true); go('#family'); } catch (err) { oops(err); }
-  });
-}
-
 // ----- profile editor -----
 function openProfileEditor() {
   const p = state.profile || { name: state.user.name };
@@ -1327,143 +1548,6 @@ function openProfileEditor() {
   });
 }
 
-// ----- account menu -----
-function openAccountMenu() {
-  const p = state.profile || state.user;
-  openModal(`
-    <div class="account-head">
-      ${avatarHTML(p, 'lg')}
-      <div><h2>${esc(firstName(p.name))}</h2><p class="muted small">${esc(state.user.email || '')}</p></div>
-    </div>
-    ${state.circleIds.length ? `
-      <h3 class="menu-title">Your circles</h3>
-      <ul class="menu-list">
-        ${state.circleIds.map((id) => `
-          <li><button type="button" class="menu-item ${id === state.cid ? 'is-current' : ''}" data-switch="${esc(id)}">
-            <span>🎄 ${esc(state.circles[id]?.name || '…')}</span>${id === state.cid ? '<span class="pill pill-green">Open</span>' : ''}
-          </button></li>`).join('')}
-      </ul>` : ''}
-    <ul class="menu-list">
-      <li><button type="button" class="menu-item" data-go="#mine">🧦 My sizes & profile</button></li>
-      ${state.cid ? '<li><button type="button" class="menu-item" data-go="#circle">⚙️ Circle settings & invites</button></li>' : ''}
-      <li><button type="button" class="menu-item" id="sign-out">👋 Sign out</button></li>
-    </ul>`);
-  modal.querySelectorAll('[data-switch]').forEach((b) => b.addEventListener('click', () => {
-    switchCircle(b.dataset.switch);
-    closeModal();
-    go('#family');
-  }));
-  modal.querySelectorAll('[data-go]').forEach((b) => b.addEventListener('click', () => { closeModal(); go(b.dataset.go); }));
-  $('#sign-out').addEventListener('click', async () => { closeModal(); await state.store.signOut(); go('#family'); });
-}
-
-// ----- memories -----
-function renderMemories() {
-  const all = state.memories || [];
-  const byYear = all.reduce((acc, m) => {
-    const y = Number(m.year) || 'Undated';
-    (acc[y] ||= []).push(m);
-    return acc;
-  }, {});
-  const years = Object.keys(byYear).sort((a, b) => (Number(b) || 0) - (Number(a) || 0));
-  view().innerHTML = `
-    <section class="memories">
-      <div class="memories-head">
-        <h2 class="section-title">${esc(circle()?.name || 'Family')} memories</h2>
-        <button type="button" class="btn btn-primary" id="add-memory">＋ Add a memory</button>
-      </div>
-      ${state.memories === null ? '<p class="loading">Opening the scrapbook…</p>' : years.length ? years.map((y) => `
-        <h3 class="year-title"><span>${esc(y)}</span></h3>
-        <div class="polaroids">
-          ${byYear[y].sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0)).map((m) => `
-            <figure class="polaroid" data-id="${esc(m.id)}" tabindex="0" role="button" aria-label="Open photo: ${esc(m.caption || 'memory')}">
-              <img src="${safeImg(m.image)}" alt="${esc(m.caption || 'Christmas memory')}" loading="lazy">
-              <figcaption>${esc(m.caption || '')}</figcaption>
-            </figure>`).join('')}
-        </div>`).join('')
-      : `<div class="empty"><div class="empty-emoji">📷</div><p>No memories yet. Add the first photo and start the scrapbook.</p></div>`}
-    </section>`;
-  $('#add-memory').addEventListener('click', openAddMemory);
-  const open = (el) => {
-    const m = all.find((x) => String(x.id) === el.dataset.id);
-    if (m) openLightbox(m);
-  };
-  view().querySelectorAll('.polaroid').forEach((el) => {
-    el.addEventListener('click', () => open(el));
-    el.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(el); } });
-  });
-}
-
-function openLightbox(m) {
-  const canDelete = m.by === me() || isAdmin();
-  openModal(`
-    <figure class="lightbox">
-      <img src="${safeImg(m.image)}" alt="${esc(m.caption || 'Christmas memory')}">
-      <figcaption><strong>${esc(m.year || '')}</strong> ${esc(m.caption || '')}${m.byName ? `<br><span class="muted small">Added by ${esc(firstName(m.byName))}</span>` : ''}</figcaption>
-    </figure>
-    ${canDelete ? `<div class="form-actions"><button type="button" class="btn btn-danger small" id="del-memory">Delete photo</button></div>` : ''}`, { wide: true });
-  $('#del-memory')?.addEventListener('click', async () => {
-    if (!(await askConfirm('Delete this memory?', 'This photo will be removed for everyone in the circle.', 'Delete'))) return;
-    try {
-      await state.store.deleteMemory(state.cid, m.id);
-      closeModal();
-      toast('🗑️ Memory deleted');
-    } catch (err) { oops(err); }
-  });
-}
-
-function openAddMemory() {
-  const year = new Date().getFullYear();
-  openModal(`
-    <h2>Add a memory 📸</h2>
-    <form id="memory-form" class="form">
-      <label>Photo
-        <input name="file" type="file" accept="image/*" required>
-      </label>
-      <div class="form-row">
-        <label>Year
-          <input name="year" type="number" inputmode="numeric" min="1950" max="${year + 1}" value="${year}" required>
-        </label>
-        <label>Caption
-          <input name="caption" maxlength="140" placeholder="e.g. Cookie marathon">
-        </label>
-      </div>
-      <p class="form-error" id="mem-error" hidden></p>
-      <div class="form-actions">
-        <button type="button" class="btn btn-ghost" data-close>Cancel</button>
-        <button type="submit" class="btn btn-primary">Save memory</button>
-      </div>
-    </form>`);
-  $('#memory-form').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const fd = new FormData(e.target);
-    const file = fd.get('file');
-    const err = $('#mem-error');
-    const submit = e.target.querySelector('[type=submit]');
-    try {
-      if (!file || !file.size) throw new Error('Pick a photo first.');
-      submit.disabled = true;
-      submit.textContent = 'Saving…';
-      const image = await shrinkImage(file, CONFIG.memoryMaxSize);
-      await state.store.addMemory(state.cid, {
-        year: Number(fd.get('year')),
-        caption: String(fd.get('caption') || '').trim(),
-        image,
-        by: me(),
-        byName: state.profile?.name || state.user.name,
-      });
-      closeModal();
-      toast('📸 Memory saved!');
-    } catch (ex) {
-      console.error(ex);
-      err.textContent = ex.code === 'permission-denied' ? 'Not allowed to add photos here.' : ex.message || 'Could not save that photo.';
-      err.hidden = false;
-      submit.disabled = false;
-      submit.textContent = 'Save memory';
-    }
-  });
-}
-
 // Shrinks a photo (keeping proportions) so it fits in one database record (under ~900 KB).
 function shrinkImage(file, maxSize) {
   return new Promise((resolve, reject) => {
@@ -1517,7 +1601,6 @@ async function init() {
       <p class="muted">Check your connection and reload.</p></section>`;
     return;
   }
-  $('#account-btn').addEventListener('click', openAccountMenu);
   window.addEventListener('hashchange', () => { render(); window.scrollTo({ top: 0 }); });
   state.store.onAuth(onAuth);
 }

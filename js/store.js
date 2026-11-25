@@ -200,6 +200,35 @@ export async function createStore() {
     async updateClaim(owner, itemId, patch) { await updateDoc(doc(db, 'users', owner, 'claims', itemId), patch); },
     async unclaim(owner, itemId) { await deleteDoc(doc(db, 'users', owner, 'claims', itemId)); },
 
+    // Only the creator can do this (enforced by the rules). Removes everyone first, in small
+    // batches so each stays well inside the rules' per-write lookup limit, then the circle.
+    async disbandCircle(cid, { uid, members, memories, inviteCode }) {
+      for (const m of members.filter((x) => x.id !== uid)) {
+        const b = writeBatch(db);
+        b.delete(doc(db, 'circles', cid, 'members', m.id));
+        if (m.status === 'active') b.update(doc(db, 'index', m.id), { circles: arrayRemove(cid), changed: cid });
+        await b.commit();
+      }
+      for (let i = 0; i < memories.length; i += 20) {
+        const b = writeBatch(db);
+        memories.slice(i, i + 20).forEach((m) => b.delete(doc(db, 'circles', cid, 'memories', m.id)));
+        await b.commit();
+      }
+      const b = writeBatch(db);
+      b.delete(doc(db, 'circles', cid, 'members', uid));
+      b.update(doc(db, 'index', uid), { circles: arrayRemove(cid), changed: cid });
+      if (inviteCode) b.delete(doc(db, 'invites', inviteCode));
+      b.delete(doc(db, 'circles', cid));
+      await b.commit();
+    },
+
+    // ----- profile memories -----
+    watchProfileMemories(uid, cb) { return watchCol(collection(db, 'users', uid, 'memories'), cb); },
+    async addProfileMemory(uid, memory) {
+      await setDoc(doc(collection(db, 'users', uid, 'memories')), { ...memory, createdAt: Date.now() });
+    },
+    async deleteProfileMemory(uid, id) { await deleteDoc(doc(db, 'users', uid, 'memories', id)); },
+
     // ----- memories -----
     watchMemories(cid, cb) { return watchCol(collection(db, 'circles', cid, 'memories'), cb); },
     async addMemory(cid, memory) {
