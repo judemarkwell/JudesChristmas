@@ -40,11 +40,31 @@ body {
     radial-gradient(circle at 60px 60px, rgba(29, 107, 71, 0.05) 2px, transparent 3px);
   background-size: 80px 80px;
   line-height: 1.5;
-  /* Always a little taller than the screen. On newer iPhones, Safari's bottom toolbar never
-     settles on a page that can't scroll, and taps on the tab bar lag until it does. */
-  min-height: calc(100vh + 2px);
-  min-height: calc(100lvh + 2px);
   -webkit-tap-highlight-color: transparent;
+}
+
+/* App-style layout: header, tab bar and the scroll area are stacked flex items, so nothing is
+   position: fixed over the page. Newer iPhones' Safari can misplace where taps land on fixed
+   bars (they fall through to the page behind), so the tab bar is part of the layout instead. */
+html { height: 100%; touch-action: manipulation; }
+body {
+  height: 100%;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.site-header { flex: none; }
+.scroller {
+  flex: 1 1 auto;
+  min-height: 0;
+  order: 2;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+  position: relative;
+  z-index: 1;
 }
 img { max-width: 100%; display: block; }
 a { color: var(--red); }
@@ -69,8 +89,7 @@ a { color: var(--red); }
 
 /* ===== Header ===== */
 .site-header {
-  position: sticky;
-  top: 0;
+  position: relative;
   z-index: 20;
   background: linear-gradient(180deg, var(--red) 0%, var(--red-dark) 100%);
   color: #fff;
@@ -151,23 +170,20 @@ main { position: relative; z-index: 1; max-width: 1100px; margin: 0 auto; paddin
 .hero[data-enter] .enter-3 { animation-delay: 0.3s; }
 @keyframes enter { from { opacity: 0; transform: translateY(12px); } }
 
-/* ===== Tabs: a floating bar on phones, pills on larger screens =====
-   The bar floats above the bottom edge so it doesn't compete with Safari's own bottom
-   controls (iOS 26), which can swallow taps right at the edge of the screen. */
+/* ===== Tabs: a bar at the bottom on phones, pills under the header on larger screens ===== */
 .tabs {
-  position: fixed;
-  left: 10px; right: 10px;
-  bottom: calc(14px + env(safe-area-inset-bottom));
+  flex: none;
+  order: 3;
+  position: relative;
   z-index: 30;
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   height: var(--tabbar-h);
-  background: rgba(255, 253, 249, 0.97);
-  -webkit-backdrop-filter: blur(12px);
-  backdrop-filter: blur(12px);
+  margin: 0 10px calc(8px + env(safe-area-inset-bottom));
+  background: var(--paper);
   border: 2px solid var(--line);
   border-radius: 22px;
-  box-shadow: 0 8px 28px rgba(77, 33, 20, 0.16);
+  box-shadow: 0 -2px 18px rgba(77, 33, 20, 0.1);
   overflow: hidden;
 }
 .tab {
@@ -193,13 +209,14 @@ main { position: relative; z-index: 1; max-width: 1100px; margin: 0 auto; paddin
 
 @media (min-width: 760px) {
   .tabs {
+    order: 1;
     position: static;
     display: flex;
     justify-content: center;
     gap: 0.6rem;
     height: auto;
     padding: 0;
-    margin: 0.5rem 0 1.5rem;
+    margin: 1rem 0 0.5rem;
     background: none;
     border: 0;
     border-radius: 0;
@@ -783,7 +800,7 @@ body.no-nav .site-footer { padding-bottom: 2rem; }
 .toast {
   position: fixed;
   left: 50%;
-  bottom: calc(var(--tabbar-h) + 1.75rem + env(safe-area-inset-bottom));
+  bottom: calc(var(--tabbar-h) + 1.5rem + env(safe-area-inset-bottom));
   transform: translate(-50%, 12px);
   background: var(--green-dark);
   color: #fff;
@@ -805,7 +822,7 @@ body.no-nav .site-footer { padding-bottom: 2rem; }
   position: relative; z-index: 1;
   text-align: center;
   font-size: 0.85rem;
-  padding: 0 1rem calc(var(--tabbar-h) + 2.5rem + env(safe-area-inset-bottom));
+  padding: 0 1rem 1.5rem;
 }
 .site-footer p { margin: 0.3rem 0; }
 @media (min-width: 760px) { .site-footer { padding-bottom: 2rem; } }

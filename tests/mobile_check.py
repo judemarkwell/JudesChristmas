@@ -6,7 +6,8 @@ Opens every screen and form at phone sizes and reports problems people hit on a 
   - tap-size: a button, link or field smaller than 44px tall
   - overflow: the page is wider than the screen (sideways scrolling)
   - errors: JavaScript errors
-  - short-page: a page that can't scroll (newer iPhones then lag on taps to the tab bar)
+  - tab-bar: the tab bar is pinned with position: fixed, can't be tapped after scrolling, or the
+    whole page scrolls instead of just the content (newer iPhones misplace taps on fixed bars)
 
 Screens run against the offline test database (?mock), so no Firebase is needed.
 
@@ -126,9 +127,27 @@ def check(page, phone, w, h, problems):
         where = f'{who} {hash_}'
         if page.evaluate('document.documentElement.scrollWidth > innerWidth + 1'):
             fail('overflow', where, 'page scrolls sideways')
-        # A page that can't scroll makes newer iPhones' Safari slow to pass taps to the tab bar.
-        if who != 'guest' and page.evaluate('document.documentElement.scrollHeight <= innerHeight'):
-            fail('short-page', where, "page can't scroll, so the tab bar can lag on iPhone")
+        # Newer iPhones' Safari can misplace taps on position: fixed bars, so the tab bar must
+        # be part of the layout, and still be the thing under your finger after scrolling.
+        if who != 'guest':
+            nav = page.evaluate('''() => {
+              const nav = document.querySelector('.tabs');
+              const sc = document.getElementById('scroller');
+              if (sc) sc.scrollTop = sc.scrollHeight;
+              const misses = [...nav.querySelectorAll('.tab')].filter((t) => {
+                const r = t.getBoundingClientRect();
+                const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+                return !(hit && t.contains(hit));
+              }).length;
+              return { fixed: getComputedStyle(nav).position === 'fixed', misses,
+                       docScrolls: document.documentElement.scrollHeight > innerHeight + 1 };
+            }''')
+            if nav['fixed']:
+                fail('tab-bar', where, 'tab bar is position: fixed (taps can fall through on iPhone)')
+            if nav['misses']:
+                fail('tab-bar', where, f"{nav['misses']} tab(s) not tappable after scrolling")
+            if nav['docScrolls']:
+                fail('tab-bar', where, 'the whole page scrolls instead of the content area')
         for t in page.evaluate(TAP_TARGETS):
             fail('tap-size', where, f"'{t['name']}' is {t['h']}px tall")
 

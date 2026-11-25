@@ -37,13 +37,18 @@
     <div class="lights" aria-hidden="true"></div>
   </header>
 
+  <!-- App-style layout: header, tab bar and this scroll area are stacked in normal flow.
+       Nothing is position: fixed over the page, because newer iPhones' Safari can misplace
+       where taps land on fixed bars (taps fall through to the page behind). -->
+  <nav class="tabs" aria-label="Sections">
+    <a href="#circles" class="tab" data-view="circles"><span class="tab-icon" aria-hidden="true">🎄</span><span>Circles</span></a>
+    <a href="#mine" class="tab" data-view="mine"><span class="tab-icon" aria-hidden="true">🎁</span><span>My list</span></a>
+    <a href="#shop" class="tab" data-view="shop"><span class="tab-icon" aria-hidden="true">🛷</span><span>Shopping</span></a>
+    <a href="#profile" class="tab" data-view="profile"><span class="tab-icon" aria-hidden="true">👤</span><span>Profile</span></a>
+  </nav>
+
+  <div id="scroller" class="scroller">
   <main>
-    <nav class="tabs" aria-label="Sections">
-      <a href="#circles" class="tab" data-view="circles"><span class="tab-icon" aria-hidden="true">🎄</span><span>Circles</span></a>
-      <a href="#mine" class="tab" data-view="mine"><span class="tab-icon" aria-hidden="true">🎁</span><span>My list</span></a>
-      <a href="#shop" class="tab" data-view="shop"><span class="tab-icon" aria-hidden="true">🛷</span><span>Shopping</span></a>
-      <a href="#profile" class="tab" data-view="profile"><span class="tab-icon" aria-hidden="true">👤</span><span>Profile</span></a>
-    </nav>
 
     <div id="view" class="view" aria-live="polite">
       <p class="loading">Warming up the sleigh…</p>
@@ -53,6 +58,7 @@
   <footer class="site-footer">
     <p id="storage-note" class="muted"></p>
   </footer>
+  </div>
 
   <dialog id="modal" class="modal">
     <button class="modal-close" type="button" data-close aria-label="Close">✕</button>

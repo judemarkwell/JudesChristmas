@@ -1601,7 +1601,7 @@ async function init() {
       <p class="muted">Check your connection and reload.</p></section>`;
     return;
   }
-  window.addEventListener('hashchange', () => { render(); window.scrollTo({ top: 0 }); });
+  window.addEventListener('hashchange', () => { render(); $('#scroller').scrollTop = 0; });
   state.store.onAuth(onAuth);
 }
 
