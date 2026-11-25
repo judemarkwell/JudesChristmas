@@ -6,6 +6,8 @@ Opens every screen and form at phone sizes and reports problems people hit on a 
   - tap-size: a button, link or field smaller than 44px tall
   - overflow: the page is wider than the screen (sideways scrolling)
   - errors: JavaScript errors
+  - layout: after typing in a form and closing it, the page didn't spring back (window left
+    scrolled, or the tab bar stranded mid-screen)
   - tab-bar: the tab bar is pinned with position: fixed, can't be tapped after scrolling, or the
     whole page scrolls instead of just the content (newer iPhones misplace taps on fixed bars)
 
@@ -185,6 +187,19 @@ def check(page, phone, w, h, problems):
             fail('overflow', name, 'the sheet is wider than the screen')
         if in_sheet:
             page.keyboard.press('Escape')
+        # After the keyboard and the pop-up close, the layout must be back in place: window not
+        # scrolled, page filling the screen, tab bar at the bottom (not stranded mid-screen).
+        page.set_viewport_size({'width': w, 'height': h})
+        page.wait_for_timeout(500)
+        if who != 'guest':
+            lay = page.evaluate('''() => {
+              const nav = document.querySelector('.tabs').getBoundingClientRect();
+              return { scrollY: window.scrollY, bodyBottom: document.body.getBoundingClientRect().bottom,
+                       navBottom: nav.bottom, h: innerHeight };
+            }''')
+            if lay['scrollY'] > 0 or abs(lay['bodyBottom'] - lay['h']) > 2 or lay['h'] - lay['navBottom'] > 40:
+                fail('layout', name, f"layout didn't settle after closing (scrollY {lay['scrollY']}, "
+                                     f"page ends at {round(lay['bodyBottom'])} of {lay['h']}, tab bar ends at {round(lay['navBottom'])})")
 
 
 def main():

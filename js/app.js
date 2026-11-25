@@ -133,18 +133,27 @@ function askConfirm(title, text, okLabel) {
   });
 }
 
-// Phones: keep the open sheet above the on-screen keyboard (see css: top-pinned action bar).
-function fitToVisibleArea() {
-  const vv = window.visualViewport;
-  if (!vv) return;
-  document.documentElement.style.setProperty('--vvh', `${Math.round(vv.height)}px`);
-  document.documentElement.style.setProperty('--vvtop', `${Math.round(vv.offsetTop)}px`);
+// Phones: when the keyboard opens, Safari may scroll the whole window to show the field, and
+// it doesn't always scroll back when the keyboard closes, leaving the layout shifted (tab bar
+// mid-screen, blank space below). The layout never needs the window scrolled, so put it back
+// whenever the keyboard or a pop-up goes away.
+function settleWindow() {
+  if (window.scrollY || window.scrollX) window.scrollTo(0, 0);
+  if (document.scrollingElement && document.scrollingElement.scrollTop) document.scrollingElement.scrollTop = 0;
 }
-if (window.visualViewport) {
-  visualViewport.addEventListener('resize', fitToVisibleArea);
-  visualViewport.addEventListener('scroll', fitToVisibleArea);
-  fitToVisibleArea();
+let settleTimer;
+function settleSoon() {
+  clearTimeout(settleTimer);
+  settleTimer = setTimeout(() => {
+    const typing = document.activeElement && /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
+    if (!typing) settleWindow();
+  }, 250);
 }
+if (window.visualViewport) visualViewport.addEventListener('resize', settleSoon);
+window.addEventListener('scroll', settleSoon, { passive: true });
+document.addEventListener('focusout', settleSoon);
+modal.addEventListener('close', () => setTimeout(settleWindow, 50));
+
 let typingTimer;
 modal.addEventListener('focusin', (e) => {
   const field = e.target.closest('input, textarea, select');
