@@ -1,0 +1,192 @@
+rules_version = '2';
+
+// Gift Circles security rules. Paste into Firebase console → Firestore Database → Rules → Publish.
+//
+// The key promise: you can see claims on a wishlist only if you share an active circle
+// with its owner AND you are not the owner. The owner can never read claims on their own list.
+//
+// Data:
+//   circles/{cid}                 name, inviteCode, createdBy        (active members read)
+//   circles/{cid}/members/{uid}   name, photoURL, role, status       (status: pending | active)
+//   circles/{cid}/memories/{id}   year, caption, image, by
+//   invites/{code}                circleId, circleName, createdBy    (anyone signed in who has the code)
+//   index/{uid}                   circles: [cid…], changed: cid      (which circles a person is active in)
+//   users/{uid}                   profile: sizes, favorites, visibility…
+//   users/{uid}/items/{id}        the wishlist
+//   users/{uid}/claims/{itemId}   who is buying what (never readable by uid)
+//
+// index/{uid} is what "shares a circle" checks against. Only an admin approving someone (or the
+// circle's founder) can add a circle to it, and only removing someone from a circle (or leaving)
+// can take one out, always in the same write as the membership change, so it can't drift.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function me() { return request.auth.uid; }
+
+    function circlePath(cid) { return /databases/$(database)/documents/circles/$(cid); }
+    function memberPath(cid, uid) { return /databases/$(database)/documents/circles/$(cid)/members/$(uid); }
+    function indexPath(uid) { return /databases/$(database)/documents/index/$(uid); }
+    function userPath(uid) { return /databases/$(database)/documents/users/$(uid); }
+    function invitePath(code) { return /databases/$(database)/documents/invites/$(code); }
+
+    function isActive(cid) {
+      return signedIn() && exists(memberPath(cid, me()))
+        && get(memberPath(cid, me())).data.status == 'active';
+    }
+    function isAdmin(cid) {
+      return isActive(cid) && get(memberPath(cid, me())).data.role == 'admin';
+    }
+    // As things will be once this write (or batch) lands.
+    function isAdminAfter(cid) {
+      return signedIn() && existsAfter(memberPath(cid, me()))
+        && getAfter(memberPath(cid, me())).data.status == 'active'
+        && getAfter(memberPath(cid, me())).data.role == 'admin';
+    }
+    function activeAfter(cid, uid) {
+      return existsAfter(memberPath(cid, uid))
+        && getAfter(memberPath(cid, uid)).data.status == 'active';
+    }
+
+    function circlesOf(uid) {
+      return exists(indexPath(uid)) ? get(indexPath(uid)).data.circles : [];
+    }
+    function sharesCircle(uid) {
+      return signedIn() && circlesOf(me()).hasAny(circlesOf(uid));
+    }
+    function isPublic(uid) {
+      return exists(userPath(uid)) && get(userPath(uid)).data.visibility == 'public';
+    }
+
+    // ---------- circles ----------
+    match /circles/{cid} {
+      allow read: if isActive(cid);
+      allow create: if signedIn()
+        && request.resource.data.createdBy == me()
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 40
+        && isAdminAfter(cid);
+      allow update: if isAdmin(cid)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'inviteCode'])
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 40;
+
+      match /members/{uid} {
+        allow read: if isActive(cid) || (signedIn() && me() == uid);
+
+        allow create: if signedIn() && me() == uid
+          && request.resource.data.name is string && request.resource.data.name.size() <= 60
+          && (
+            // The founder, in the same batch that creates the circle.
+            (!exists(circlePath(cid))
+              && getAfter(circlePath(cid)).data.createdBy == me()
+              && request.resource.data.role == 'admin'
+              && request.resource.data.status == 'active')
+            ||
+            // Anyone with a valid invite code: waits for an admin to approve.
+            (request.resource.data.role == 'member'
+              && request.resource.data.status == 'pending'
+              && request.resource.data.code is string
+              && exists(invitePath(request.resource.data.code))
+              && get(invitePath(request.resource.data.code)).data.circleId == cid)
+          );
+
+        allow update: if
+          (isAdmin(cid)
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'role'])
+            && request.resource.data.status in ['pending', 'active']
+            && request.resource.data.role in ['member', 'admin'])
+          ||
+          (signedIn() && me() == uid
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'photoURL']));
+
+        allow delete: if isAdmin(cid) || (signedIn() && me() == uid);
+      }
+
+      match /memories/{mid} {
+        allow read: if isActive(cid);
+        allow create: if isActive(cid)
+          && request.resource.data.by == me()
+          && request.resource.data.image is string
+          && request.resource.data.image.size() < 900000;
+        allow delete: if isActive(cid) && (resource.data.by == me() || isAdmin(cid));
+      }
+    }
+
+    // ---------- invites ----------
+    match /invites/{code} {
+      allow get: if signedIn();
+      allow list: if false;
+      allow create: if signedIn()
+        && request.resource.data.createdBy == me()
+        && isAdminAfter(request.resource.data.circleId);
+      allow delete: if signedIn() && isAdmin(resource.data.circleId);
+    }
+
+    // ---------- circle index ----------
+    match /index/{uid} {
+      allow read: if signedIn() && me() == uid;
+
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(['circles', 'changed'])
+        && (
+          (me() == uid && request.resource.data.circles.size() == 0)
+          ||
+          (request.resource.data.circles.size() == 1
+            && request.resource.data.circles[0] == request.resource.data.changed
+            && activeAfter(request.resource.data.changed, uid)
+            && isAdminAfter(request.resource.data.changed))
+        );
+
+      allow update: if signedIn()
+        && request.resource.data.keys().hasOnly(['circles', 'changed'])
+        && oneCircleChange(uid);
+      allow delete: if false;
+
+      function oneCircleChange(uid) {
+        let before = resource.data.circles.toSet();
+        let after = request.resource.data.circles.toSet();
+        let c = request.resource.data.changed;
+        let added = after.difference(before);
+        let removed = before.difference(after);
+        return request.resource.data.circles.size() == after.size()
+          && (
+            // Joining: added exactly c, they are active in c, and an admin of c did it.
+            (added == [c].toSet() && removed.size() == 0
+              && activeAfter(c, uid) && isAdminAfter(c))
+            ||
+            // Leaving or removed: took out exactly c, and their membership is gone too.
+            (removed == [c].toSet() && added.size() == 0
+              && !existsAfter(memberPath(c, uid))
+              && (me() == uid || isAdmin(c)))
+          );
+      }
+    }
+
+    // ---------- people ----------
+    match /users/{uid} {
+      allow read: if (signedIn() && me() == uid) || sharesCircle(uid) || resource.data.visibility == 'public';
+      allow create, update: if signedIn() && me() == uid
+        && request.resource.data.visibility in ['circle', 'public'];
+      allow delete: if false;
+
+      match /items/{itemId} {
+        allow read: if (signedIn() && me() == uid) || sharesCircle(uid) || isPublic(uid);
+        allow write: if signedIn() && me() == uid;
+      }
+
+      match /claims/{itemId} {
+        // Never the owner. Only people who share a circle with them.
+        allow read: if signedIn() && me() != uid && sharesCircle(uid);
+        allow create: if signedIn() && me() != uid && sharesCircle(uid)
+          && request.resource.data.by == me()
+          && request.resource.data.owner == uid;
+        allow update: if signedIn() && resource.data.by == me()
+          && request.resource.data.by == me()
+          && request.resource.data.owner == uid;
+        allow delete: if signedIn() && resource.data.by == me();
+      }
+    }
+  }
+}

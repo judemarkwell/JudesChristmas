@@ -1,226 +1,190 @@
-// Storage layer. Two interchangeable backends with the same interface:
-//   local    – saved in this browser only (demo / testing)
-//   firebase – shared Firestore database, live-updates for everyone
+// Data layer. The app only talks to this interface, so the same screens run against
+// Firebase in real use and against js/mock-store.js (add ?mock to the URL) for testing.
 //
-// Interface:
-//   mode                       'local' | 'firebase'
-//   listItems(seed)            -> wishlist items (seeded from data/items.json the first time)
-//   saveItem(item)             create or update by id
-//   deleteItem(id)
-//   getProfile(seed)           -> profile object
-//   saveProfile(profile)
-//   subscribeClaims(cb)        cb({ [itemId]: claim }) on every change; returns unsubscribe
-//   claim(itemId, data)        throws Error('already-claimed') if someone got there first
-//   updateClaim(itemId, patch)
-//   unclaim(itemId)
-//   listMemories()             -> [{ id, year, caption, image, createdAt }]
-//   addMemory(memory)          -> saved memory
-//   deleteMemory(id)
+// watch* functions call back with fresh data on every change and return an unsubscribe.
+// A watch that isn't allowed (not approved yet, removed from a circle) calls back with null.
 
 import { CONFIG } from './config.js';
 
-const LS = {
-  claims: 'jc.claims',
-  memories: 'jc.memories',
-  items: 'jc.items',
-  profile: 'jc.profile',
-};
+const V = '10.12.2';
 
-function readLS(key, fallback) {
-  try {
-    const raw = localStorage.getItem(key);
-    return raw ? JSON.parse(raw) : fallback;
-  } catch {
-    return fallback;
+export async function createStore() {
+  if (new URLSearchParams(location.search).has('mock')) {
+    const { createMockStore } = await import('./mock-store.js');
+    return createMockStore();
   }
-}
+  const [{ initializeApp }, A, F] = await Promise.all([
+    import(`https://www.gstatic.com/firebasejs/${V}/firebase-app.js`),
+    import(`https://www.gstatic.com/firebasejs/${V}/firebase-auth.js`),
+    import(`https://www.gstatic.com/firebasejs/${V}/firebase-firestore.js`),
+  ]);
+  const app = initializeApp(CONFIG.firebase);
+  const auth = A.getAuth(app);
+  const db = F.getFirestore(app);
+  const { doc, collection, getDoc, setDoc, updateDoc, deleteDoc, onSnapshot, writeBatch,
+    runTransaction, arrayUnion, arrayRemove } = F;
 
-function writeLS(key, value) {
-  try {
-    localStorage.setItem(key, JSON.stringify(value));
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function createLocalStore() {
-  let claims = readLS(LS.claims, {});
-  const subscribers = new Set();
-  const emit = () => subscribers.forEach((cb) => cb({ ...claims }));
-  const saveClaims = () => {
-    if (!writeLS(LS.claims, claims)) throw new Error('storage-failed');
-    emit();
-  };
-
-  // Keep multiple tabs in sync.
-  window.addEventListener('storage', (e) => {
-    if (e.key === LS.claims) {
-      claims = readLS(LS.claims, {});
-      emit();
-    }
+  const toUser = (u) => u && ({
+    uid: u.uid,
+    name: u.displayName || (u.email ? u.email.split('@')[0] : 'Friend'),
+    photoURL: u.photoURL || '',
+    email: u.email || '',
   });
 
-  return {
-    mode: 'local',
+  const watchDoc = (ref, cb) => onSnapshot(ref,
+    (s) => cb(s.exists() ? { id: s.id, ...s.data() } : null),
+    () => cb(null));
+  const watchCol = (ref, cb) => onSnapshot(ref,
+    (s) => cb(s.docs.map((d) => ({ id: d.id, ...d.data() }))),
+    () => cb(null));
+  const strip = ({ id, ...rest }) => rest;
 
-    async listItems(seed) {
-      return readLS(LS.items, null) ?? seed;
-    },
-    async saveItem(item, current) {
-      const list = [...current];
-      const i = list.findIndex((x) => x.id === item.id);
-      if (i >= 0) list[i] = item; else list.push(item);
-      if (!writeLS(LS.items, list)) throw new Error('storage-full');
-      return list;
-    },
-    async deleteItem(id, current) {
-      const list = current.filter((x) => x.id !== id);
-      if (!writeLS(LS.items, list)) throw new Error('storage-full');
-      return list;
-    },
-
-    async getProfile(seed) {
-      return { ...seed, ...readLS(LS.profile, {}) };
-    },
-    async saveProfile(profile) {
-      if (!writeLS(LS.profile, profile)) throw new Error('storage-full');
-      return profile;
-    },
-
-    subscribeClaims(cb) {
-      subscribers.add(cb);
-      cb({ ...claims });
-      return () => subscribers.delete(cb);
-    },
-    async claim(itemId, data) {
-      if (claims[itemId]) throw new Error('already-claimed');
-      claims[itemId] = { purchased: false, note: '', ...data, claimedAt: Date.now() };
-      saveClaims();
-    },
-    async updateClaim(itemId, patch) {
-      if (!claims[itemId]) return;
-      claims[itemId] = { ...claims[itemId], ...patch };
-      saveClaims();
-    },
-    async unclaim(itemId) {
-      delete claims[itemId];
-      saveClaims();
-    },
-
-    async listMemories() {
-      return readLS(LS.memories, []);
-    },
-    async addMemory(memory) {
-      const list = readLS(LS.memories, []);
-      const saved = { id: `m${Date.now()}`, ...memory, createdAt: Date.now() };
-      list.push(saved);
-      if (!writeLS(LS.memories, list)) throw new Error('storage-full');
-      return saved;
-    },
-    async deleteMemory(id) {
-      writeLS(LS.memories, readLS(LS.memories, []).filter((m) => m.id !== id));
-    },
-  };
-}
-
-async function createFirebaseStore(firebaseConfig) {
-  const v = '10.12.2';
-  const { initializeApp } = await import(`https://www.gstatic.com/firebasejs/${v}/firebase-app.js`);
-  const fs = await import(`https://www.gstatic.com/firebasejs/${v}/firebase-firestore.js`);
-
-  const app = initializeApp(firebaseConfig);
-  const db = fs.getFirestore(app);
-  const claimsCol = fs.collection(db, 'claims');
-  const memoriesCol = fs.collection(db, 'memories');
-  const itemsCol = fs.collection(db, 'items');
-  const profileRef = fs.doc(db, 'profiles', 'owner');
+  // Finish a redirect sign-in if one was used (popup blocked).
+  A.getRedirectResult(auth).catch(() => {});
 
   return {
     mode: 'firebase',
 
-    async listItems(seed) {
-      const snap = await fs.getDocs(itemsCol);
-      if (snap.empty) return seed;
-      return snap.docs.map((d) => ({ id: d.id, ...d.data() }))
-        .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+    // ----- auth -----
+    onAuth(cb) { return A.onAuthStateChanged(auth, (u) => cb(toUser(u))); },
+    async signIn() {
+      const provider = new A.GoogleAuthProvider();
+      provider.setCustomParameters({ prompt: 'select_account' });
+      try {
+        await A.signInWithPopup(auth, provider);
+      } catch (err) {
+        if (['auth/popup-blocked', 'auth/operation-not-supported-in-this-environment'].includes(err.code)) {
+          await A.signInWithRedirect(auth, provider);
+        } else if (err.code !== 'auth/popup-closed-by-user' && err.code !== 'auth/cancelled-popup-request') {
+          throw err;
+        }
+      }
     },
-    async saveItem(item, current) {
-      // First save copies the seed list into the database so it becomes the source of truth.
-      const list = [...current];
-      const i = list.findIndex((x) => x.id === item.id);
-      if (i >= 0) list[i] = item; else list.push(item);
-      const batch = fs.writeBatch(db);
-      list.forEach((it, order) => {
-        const { id, ...rest } = it;
-        batch.set(fs.doc(db, 'items', id), { ...rest, order });
+    signOut() { return A.signOut(auth); },
+
+    // Creates the profile and circle index the first time someone signs in.
+    async ensureAccount(user) {
+      const pRef = doc(db, 'users', user.uid);
+      const iRef = doc(db, 'index', user.uid);
+      const [p, i] = await Promise.all([getDoc(pRef), getDoc(iRef)]);
+      if (!p.exists()) {
+        await setDoc(pRef, {
+          name: user.name, photoURL: user.photoURL, birthday: '', visibility: 'circle',
+          sizes: {}, favorites: {}, avoid: '', payback: {}, createdAt: Date.now(),
+        });
+      }
+      if (!i.exists()) await setDoc(iRef, { circles: [], changed: '' });
+    },
+
+    // ----- circles -----
+    watchIndex(uid, cb) { return watchDoc(doc(db, 'index', uid), (d) => cb(d ? d.circles || [] : [])); },
+    watchCircle(cid, cb) { return watchDoc(doc(db, 'circles', cid), cb); },
+    watchMembers(cid, cb) { return watchCol(collection(db, 'circles', cid, 'members'), cb); },
+    watchMembership(cid, uid, cb) { return watchDoc(doc(db, 'circles', cid, 'members', uid), cb); },
+
+    async createCircle(user, name) {
+      const ref = doc(collection(db, 'circles'));
+      const code = newCode();
+      const b = writeBatch(db);
+      b.set(ref, { name, createdBy: user.uid, inviteCode: code, createdAt: Date.now() });
+      b.set(doc(db, 'circles', ref.id, 'members', user.uid), {
+        name: user.name, photoURL: user.photoURL || '', role: 'admin', status: 'active', joinedAt: Date.now(),
       });
-      await batch.commit();
-      return list;
+      b.update(doc(db, 'index', user.uid), { circles: arrayUnion(ref.id), changed: ref.id });
+      b.set(doc(db, 'invites', code), { circleId: ref.id, circleName: name, createdBy: user.uid });
+      await b.commit();
+      return ref.id;
     },
-    async deleteItem(id, current) {
-      await fs.deleteDoc(fs.doc(db, 'items', id));
-      return current.filter((x) => x.id !== id);
+    async renameCircle(cid, name) { await updateDoc(doc(db, 'circles', cid), { name }); },
+    async newInvite(user, circle) {
+      const code = newCode();
+      const b = writeBatch(db);
+      b.set(doc(db, 'invites', code), { circleId: circle.id, circleName: circle.name, createdBy: user.uid });
+      b.update(doc(db, 'circles', circle.id), { inviteCode: code });
+      if (circle.inviteCode) b.delete(doc(db, 'invites', circle.inviteCode));
+      await b.commit();
+      return code;
     },
-
-    async getProfile(seed) {
-      const snap = await fs.getDoc(profileRef);
-      return { ...seed, ...(snap.exists() ? snap.data() : {}) };
+    async getInvite(code) {
+      try {
+        const s = await getDoc(doc(db, 'invites', code));
+        return s.exists() ? { code, ...s.data() } : null;
+      } catch { return null; }
     },
-    async saveProfile(profile) {
-      await fs.setDoc(profileRef, profile);
-      return profile;
-    },
-
-    subscribeClaims(cb) {
-      return fs.onSnapshot(
-        claimsCol,
-        (snap) => {
-          const out = {};
-          snap.forEach((d) => { out[d.id] = d.data(); });
-          cb(out);
-        },
-        (err) => console.error('Claims listener failed', err),
-      );
-    },
-    async claim(itemId, data) {
-      const ref = fs.doc(db, 'claims', itemId);
-      // Transaction so two elves can't claim the same gift at the same moment.
-      await fs.runTransaction(db, async (tx) => {
-        const snap = await tx.get(ref);
-        if (snap.exists()) throw new Error('already-claimed');
-        tx.set(ref, { purchased: false, note: '', ...data, claimedAt: Date.now() });
+    async requestJoin(user, invite) {
+      await setDoc(doc(db, 'circles', invite.circleId, 'members', user.uid), {
+        name: user.name, photoURL: user.photoURL || '', role: 'member', status: 'pending',
+        code: invite.code, requestedAt: Date.now(),
       });
     },
-    async updateClaim(itemId, patch) {
-      await fs.updateDoc(fs.doc(db, 'claims', itemId), patch);
+    async approve(cid, uid) {
+      const b = writeBatch(db);
+      b.update(doc(db, 'circles', cid, 'members', uid), { status: 'active' });
+      b.update(doc(db, 'index', uid), { circles: arrayUnion(cid), changed: cid });
+      await b.commit();
     },
-    async unclaim(itemId) {
-      await fs.deleteDoc(fs.doc(db, 'claims', itemId));
+    async setRole(cid, uid, role) { await updateDoc(doc(db, 'circles', cid, 'members', uid), { role }); },
+    // Decline a request, remove a member, or leave (uid = yourself).
+    async removeMember(cid, uid, wasActive) {
+      const b = writeBatch(db);
+      b.delete(doc(db, 'circles', cid, 'members', uid));
+      if (wasActive) b.update(doc(db, 'index', uid), { circles: arrayRemove(cid), changed: cid });
+      await b.commit();
+    },
+    async updateMyMemberships(uid, cids, patch) {
+      const b = writeBatch(db);
+      cids.forEach((cid) => b.update(doc(db, 'circles', cid, 'members', uid), patch));
+      await b.commit();
     },
 
-    async listMemories() {
-      const snap = await fs.getDocs(memoriesCol);
-      return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    // ----- profiles -----
+    watchProfile(uid, cb) { return watchDoc(doc(db, 'users', uid), cb); },
+    async saveProfile(uid, profile) { await setDoc(doc(db, 'users', uid), strip(profile)); },
+
+    // ----- wishlists -----
+    watchItems(uid, cb) {
+      return watchCol(collection(db, 'users', uid, 'items'),
+        (list) => cb(list && list.sort((a, b) => (a.order ?? 0) - (b.order ?? 0))));
     },
-    async addMemory(memory) {
-      const data = { ...memory, createdAt: Date.now() };
-      const ref = await fs.addDoc(memoriesCol, data);
-      return { id: ref.id, ...data };
+    async saveItem(uid, item) { await setDoc(doc(db, 'users', uid, 'items', item.id), strip(item)); },
+    async saveItems(uid, items) {
+      const b = writeBatch(db);
+      items.forEach((it) => b.set(doc(db, 'users', uid, 'items', it.id), strip(it)));
+      await b.commit();
     },
-    async deleteMemory(id) {
-      await fs.deleteDoc(fs.doc(db, 'memories', id));
+    async deleteItem(uid, id) { await deleteDoc(doc(db, 'users', uid, 'items', id)); },
+
+    // ----- claims (never requested for your own list) -----
+    watchClaims(owner, cb) {
+      return onSnapshot(collection(db, 'users', owner, 'claims'), (s) => {
+        const out = {};
+        s.forEach((d) => { out[d.id] = d.data(); });
+        cb(out);
+      }, () => cb(null));
     },
+    async claim(owner, itemId, data) {
+      const ref = doc(db, 'users', owner, 'claims', itemId);
+      await runTransaction(db, async (tx) => {
+        const s = await tx.get(ref);
+        if (s.exists()) throw new Error('already-claimed');
+        tx.set(ref, { purchased: false, note: '', ...data, owner, claimedAt: Date.now() });
+      });
+    },
+    async updateClaim(owner, itemId, patch) { await updateDoc(doc(db, 'users', owner, 'claims', itemId), patch); },
+    async unclaim(owner, itemId) { await deleteDoc(doc(db, 'users', owner, 'claims', itemId)); },
+
+    // ----- memories -----
+    watchMemories(cid, cb) { return watchCol(collection(db, 'circles', cid, 'memories'), cb); },
+    async addMemory(cid, memory) {
+      await setDoc(doc(collection(db, 'circles', cid, 'memories')), { ...memory, createdAt: Date.now() });
+    },
+    async deleteMemory(cid, id) { await deleteDoc(doc(db, 'circles', cid, 'memories', id)); },
   };
 }
 
-export async function createStore() {
-  if (CONFIG.firebase && CONFIG.firebase.apiKey) {
-    try {
-      return await createFirebaseStore(CONFIG.firebase);
-    } catch (err) {
-      console.warn('Firebase unavailable, falling back to local storage.', err);
-    }
-  }
-  return createLocalStore();
+// 16 random letters and digits: unguessable invite codes.
+export function newCode() {
+  const abc = 'abcdefghijkmnpqrstuvwxyz23456789';
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  return [...bytes].map((b) => abc[b % abc.length]).join('');
 }

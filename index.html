@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
-  <title>Jude's Christmas Wishlist</title>
-  <meta name="description" content="Jude's Christmas wishlist: browse, claim a gift, and keep it a surprise.">
+  <title>Gift Circles</title>
+  <meta name="description" content="Family wishlists: share what you want, claim a gift, and keep it a surprise.">
   <meta name="theme-color" content="#b3202a">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎄</text></svg>">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -12,31 +12,25 @@
   <link href="https://fonts.googleapis.com/css2?family=Mountains+of+Christmas:wght@700&family=Nunito:wght@400;600;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="css/styles.css">
 </head>
-<body>
+<body class="no-nav">
   <div class="snow" id="snow" aria-hidden="true"></div>
 
   <header class="site-header">
     <div class="header-inner">
-      <a href="#catalog" class="brand">
+      <a href="#family" class="brand">
         <span class="brand-icon" aria-hidden="true">🎄</span>
-        <span class="brand-text">Jude's Wishlist</span>
+        <span class="brand-text">Gift Circles</span>
       </a>
-      <button id="mode-btn" class="mode-pill" type="button"></button>
+      <button id="account-btn" class="account-btn" type="button" hidden></button>
     </div>
     <div class="lights" aria-hidden="true"></div>
   </header>
 
   <main>
-    <section class="hero" data-enter>
-      <h1 class="enter-1">Jude's Christmas List</h1>
-      <p class="tagline enter-2">Peek at the wishes, claim a gift, and help keep the surprise a surprise.</p>
-      <div class="countdown enter-3" id="countdown"></div>
-    </section>
-
     <nav class="tabs" aria-label="Sections">
-      <a href="#catalog" class="tab" data-view="catalog"><span class="tab-icon" aria-hidden="true">🎁</span><span>Wishlist</span></a>
-      <a href="#profile" class="tab" data-view="profile"><span class="tab-icon" aria-hidden="true">🧦</span><span>Sizes</span></a>
-      <a href="#shop" class="tab" data-view="shop"><span class="tab-icon" aria-hidden="true">🧝</span><span>Elf Shop</span></a>
+      <a href="#family" class="tab" data-view="family"><span class="tab-icon" aria-hidden="true">🏡</span><span>Family</span></a>
+      <a href="#mine" class="tab" data-view="mine"><span class="tab-icon" aria-hidden="true">🎁</span><span>My list</span></a>
+      <a href="#shop" class="tab" data-view="shop"><span class="tab-icon" aria-hidden="true">🛷</span><span>Shopping</span></a>
       <a href="#memories" class="tab" data-view="memories"><span class="tab-icon" aria-hidden="true">📸</span><span>Memories</span></a>
     </nav>
 
@@ -46,7 +40,7 @@
   </main>
 
   <footer class="site-footer">
-    <p id="storage-note"></p>
+    <p id="storage-note" class="muted"></p>
     <p class="muted">Made with cocoa and code ☕</p>
   </footer>
 

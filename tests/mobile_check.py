@@ -7,6 +7,8 @@ Opens every screen and form at phone sizes and reports problems people hit on a 
   - overflow: the page is wider than the screen (sideways scrolling)
   - errors: JavaScript errors
 
+Screens run against the offline test database (?mock), so no Firebase is needed.
+
 The keyboard is simulated two ways:
   - resizing:  the page shrinks when the keyboard opens (Android Chrome)
   - overlay:   the page keeps its size and the keyboard covers the bottom of the screen
@@ -17,6 +19,7 @@ Usage:  pip install playwright && playwright install chromium
         python3 tests/mobile_check.py            # exits 1 if anything fails
 """
 
+import json
 import subprocess
 import sys
 import time
@@ -30,16 +33,49 @@ BASE = f'http://localhost:{PORT}/'
 PHONES = [('iPhone 14', 390, 844), ('small Android', 360, 740)]
 KEYBOARD = 336  # typical phone keyboard height in CSS px
 
-# Each form: how to reach it, then the selector of its <form>.
-FORMS = [
-    ('Add a wish', '#catalog', ['#add-wish'], '#item-form'),
-    ('Edit a wish', '#catalog', ['[data-action=edit] >> nth=0'], '#item-form'),
-    ('Edit profile', '#profile', ['#edit-profile'], '#profile-form'),
-    ('Elf check-in', '#shop', ['#enter-elf'], '#elf-form'),
-    ('Add a memory', '#memories', ['#add-memory'], '#memory-form'),
-    ('Claim a gift', '#catalog', ['@elf', '[data-action=claim] >> nth=0'], '#claim-form'),
+# Screens run against the offline test database (?mock), loaded with a small family:
+# Jude (admin, with his starter list), Mom (member), Sam (waiting to be let in),
+# a signed-in newcomer with no circle yet, and a signed-out visitor.
+VIEWS = [
+    ('guest', '#family'),          # landing page
+    ('newbie', '#family'),         # first-time setup
+    ('jude', '#family'), ('jude', '#mine'), ('jude', '#person-u-mom'), ('jude', '#shop'),
+    ('jude', '#memories'), ('jude', '#circle'),
+    ('mom', '#person-u-jude'), ('mom', '#shop'), ('mom', '#circle'),
 ]
-VIEWS = ['#catalog', '#profile', '#shop', '#memories']
+# Each form: who, where, how to open it, then the selector of its <form>.
+FORMS = [
+    ('Add a wish', 'jude', '#mine', ['#add-wish'], '#item-form'),
+    ('Edit a wish', 'jude', '#mine', ['[data-action=edit] >> nth=0'], '#item-form'),
+    ('Edit profile', 'jude', '#mine', ['#edit-profile'], '#profile-form'),
+    ('Claim a gift', 'mom', '#person-u-jude', ['[data-action=claim] >> nth=0'], '#claim-form'),
+    ('Add a memory', 'jude', '#memories', ['#add-memory'], '#memory-form'),
+]
+
+
+def fixture():
+    items = json.loads((ROOT / 'data/items.json').read_text())['items'][:6]
+    member = lambda name, role='member', status='active': {'name': name, 'photoURL': '', 'role': role, 'status': status}
+    profile = lambda name: {'name': name, 'photoURL': '', 'birthday': '', 'visibility': 'circle',
+                            'sizes': {'shirt': 'L', 'shoe': '10.5'}, 'favorites': {'colors': 'Green'}, 'avoid': '', 'payback': {}}
+    return {
+        'users': {'u-jude': profile('Jude'), 'u-mom': profile('Mom'), 'u-sam': profile('Sam')},
+        'index': {'u-jude': {'circles': ['c1']}, 'u-mom': {'circles': ['c1']}, 'u-sam': {'circles': []}},
+        'circles': {'c1': {'name': 'Markwell Family', 'createdBy': 'u-jude', 'inviteCode': 'testcode12345678',
+                           'members': {'u-jude': member('Jude', 'admin'), 'u-mom': member('Mom'),
+                                       'u-sam': member('Sam', status='pending')},
+                           'memories': {}}},
+        'invites': {'testcode12345678': {'circleId': 'c1', 'circleName': 'Markwell Family', 'createdBy': 'u-jude'}},
+        'items': {'u-jude': {it['id']: {k: v for k, v in it.items() if k != 'id'} for it in items},
+                  'u-mom': {'scarf': {'name': 'Wool scarf', 'emoji': '🧣', 'priority': 2}}, 'u-sam': {}},
+        'claims': {'u-jude': {}, 'u-mom': {}, 'u-sam': {}},
+    }
+
+
+def open_as(page, who, hash_):
+    page.goto(f'{BASE}?mock&as={who}{hash_}')
+    page.wait_for_timeout(700)
+
 
 TAP_TARGETS = """
 () => [...document.querySelectorAll('button, a.btn, .tab, .chip, input:not([type=hidden]), textarea, select, .seg-opt, .icon-opt')]
@@ -67,35 +103,31 @@ VISIBLE = """
 """
 
 
-def enter_elf(page):
-    page.evaluate("localStorage.setItem('jc.elf','1'); localStorage.setItem('jc.elfName','Tester')")
-    page.reload()
-    page.wait_for_selector('.tag-card, .locked, .profile, .memories')
-
-
 def check(page, phone, w, h, problems):
     def fail(kind, where, detail):
         problems.append(f'[{phone}] {kind}: {where}: {detail}')
 
-    for view in VIEWS:
-        page.set_viewport_size({'width': w, 'height': h})
-        page.goto(BASE + view)
-        page.wait_for_timeout(600)
-        if page.evaluate('document.documentElement.scrollWidth > innerWidth + 1'):
-            fail('overflow', view, 'page scrolls sideways')
-        for t in page.evaluate(TAP_TARGETS):
-            fail('tap-size', view, f"'{t['name']}' is {t['h']}px tall")
+    page.goto(BASE)
+    page.evaluate("""(db) => {
+      localStorage.clear();
+      localStorage.setItem('mock.db', JSON.stringify(db));
+      for (const who of ['jude', 'mom', 'newbie']) localStorage.setItem('mock.signedIn.' + who, '1');
+    }""", fixture())
 
-    for name, view, steps, form in FORMS:
-        page.evaluate('localStorage.clear()')
+    for who, hash_ in VIEWS:
         page.set_viewport_size({'width': w, 'height': h})
-        page.goto(BASE + view)
-        page.wait_for_timeout(500)
+        open_as(page, who, hash_)
+        where = f'{who} {hash_}'
+        if page.evaluate('document.documentElement.scrollWidth > innerWidth + 1'):
+            fail('overflow', where, 'page scrolls sideways')
+        for t in page.evaluate(TAP_TARGETS):
+            fail('tap-size', where, f"'{t['name']}' is {t['h']}px tall")
+
+    for name, who, hash_, steps, form in FORMS:
+        page.set_viewport_size({'width': w, 'height': h})
+        open_as(page, who, hash_)
         for step in steps:
-            if step == '@elf':
-                enter_elf(page)
-            else:
-                page.click(step)
+            page.click(step)
         page.wait_for_selector(form)
         fields = page.locator(f'{form} input:not([type=radio]):not([type=checkbox]):not([type=file]), {form} textarea')
         submit = page.locator(f'{form} [type=submit]')

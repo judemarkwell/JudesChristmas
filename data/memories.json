@@ -1,4 +1,0 @@
-{
-  "_help": "Memories that ship with the site. Put photos in /memories and add an entry: { \"id\": \"2025-tree\", \"year\": 2025, \"caption\": \"Decorating the tree\", \"image\": \"memories/2025-tree.jpg\" }. Photos added through the site are stored separately (see README).",
-  "memories": []
-}
