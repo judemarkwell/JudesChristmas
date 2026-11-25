@@ -1,6 +1,6 @@
 import { CONFIG } from './config.js';
 import { createStore } from './store.js';
-import { readLink, asinOf } from './links.js';
+import { readLink } from './links.js';
 
 // ---------- helpers ----------
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -406,7 +406,7 @@ function renderLanding(r) {
       </button>
       <p class="muted small center">If nothing opens, open this page in Safari or Chrome. Google doesn't allow signing in inside some in-app browsers.</p>
       <ul class="feature-list">
-        <li><span aria-hidden="true">🎁</span><div><strong>Your wishlist</strong><br><span class="muted">Links, priorities, sizes and cheaper options.</span></div></li>
+        <li><span aria-hidden="true">🎁</span><div><strong>Your wishlist</strong><br><span class="muted">Links, priorities, sizes, and one-tap price comparisons.</span></div></li>
         <li><span aria-hidden="true">🙈</span><div><strong>No spoilers</strong><br><span class="muted">Family can see who's buying what. You never can.</span></div></li>
         <li><span aria-hidden="true">🧦</span><div><strong>Sizes in one place</strong><br><span class="muted">No more texting around for ring and shoe sizes.</span></div></li>
       </ul>
@@ -1157,7 +1157,6 @@ function bindWishlist(ownerUid, isOwner) {
     const item = (state.items[ownerUid] || []).find((i) => i.id === btn.dataset.id);
     if (!item) return;
     const a = btn.dataset.action;
-    if (a === 'alts') openAlternatives(item);
     if (a === 'edit') openItemEditor(item);
     if (a === 'claim') openClaim(ownerUid, item);
     if (a === 'manage') openManage(ownerUid, item.id);
@@ -1200,7 +1199,7 @@ function cardHTML(item, ownerUid, isOwner, claim) {
       ${status}
       <div class="card-actions">
         ${item.url ? `<a class="btn btn-ghost" href="${safeLink(item.url)}" target="_blank" rel="noopener noreferrer">View item ↗</a>` : ''}
-        <button type="button" class="btn btn-ghost" data-action="alts" data-id="${esc(item.id)}">Cheaper options</button>
+        <a class="btn btn-ghost" href="${shopSearch(item.name)}" target="_blank" rel="noopener noreferrer">🔎 Search similar</a>
         ${mainBtn}
       </div>
     </article>`;
@@ -1383,27 +1382,6 @@ function openItemEditor(existing) {
       toast('🗑️ Removed from your list');
     } catch (ex) { oops(ex); }
   });
-}
-
-// ----- cheaper alternatives -----
-function openAlternatives(item) {
-  const alts = item.alternatives || [];
-  const asin = asinOf(item.url);
-  openModal(`
-    <h2>Cheaper options 💸</h2>
-    <p class="muted">For <strong>${esc(item.name)}</strong></p>
-    ${alts.length ? `
-      <ul class="alt-list">
-        ${alts.map((a) => `
-          <li>
-            <div><strong>${esc(a.name)}</strong>${a.note ? `<p>${esc(a.note)}</p>` : ''}</div>
-            <a class="btn btn-ghost small" href="${shopSearch(a.query || a.name)}" target="_blank" rel="noopener noreferrer">Find it ↗</a>
-          </li>`).join('')}
-      </ul>` : `<p>No budget picks for this one yet, but the price links below can still help.</p>`}
-    <div class="deal-links">
-      <a class="btn btn-secondary" href="${shopSearch(item.name)}" target="_blank" rel="noopener noreferrer">🔎 Compare prices</a>
-      ${asin ? `<a class="btn btn-secondary" href="https://camelcamelcamel.com/product/${asin}" target="_blank" rel="noopener noreferrer">📉 Amazon price history</a>` : ''}
-    </div>`);
 }
 
 // ----- claiming -----
