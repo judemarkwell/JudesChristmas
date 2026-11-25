@@ -1,129 +1,66 @@
-# 🎄 Jude's Christmas Wishlist
+# 🎄 Gift Circles
 
-A small, mobile-friendly wishlist site where family can browse what Jude wants, claim gifts without spoiling the surprise, find cheaper alternatives, and keep a scrapbook of Christmas memories.
+Family wishlists that keep the surprise. Everyone signs in with Google, joins a circle (like "Markwell Family") by invite link, and keeps their own wishlist and sizes. Everyone in the circle can see who's buying what, except the person the gift is for.
 
-Plain HTML, CSS and JavaScript. There's no build step, so it runs on GitHub Pages as-is.
+Live at **https://judemarkwell.github.io/JudesChristmas/**
 
-## Sections
+## How it works
 
-| Tab | Who it's for | What it does |
-| --- | --- | --- |
-| 🎁 **Catalog** | Everyone | All wishlist items, with category filters, search, priority hearts, item links and **Cheaper options** (budget picks, a price-comparison search and Amazon price history). |
-| 🧝 **Elf Shop** | Family only | Who claimed what, what's been bought, and what's still up for grabs. It's locked behind a family code. |
-| 📸 **Memories** | Everyone | Photos grouped by year, polaroid style. Add photos from your phone or by link. |
+| Tab | What it does |
+| --- | --- |
+| 🏡 **Family** | Everyone in your circle, with wish counts and upcoming birthdays. Tap someone to see their list and sizes, and claim a gift. Admins see who's waiting to join. |
+| 🎁 **My list** | Your wishes: add, edit and remove them, plus your sizes, favorites, "please don't buy" list and pay-back handles. You never see claims on your own list. |
+| 🛷 **Shopping** | Everything you've claimed, for everyone, with a "bought" checkbox. |
+| 📸 **Memories** | The circle's photo scrapbook, by year. |
 
-### Keeping it a surprise ("Elf mode")
+The account button (top right) switches circles, opens circle settings (invite link, approvals, members, admins), and signs out.
 
-Claims are **hidden by default**. Jude's view of the catalog never shows what's been claimed, and the Elf Shop tab says "No peeking!" Family members tap **I'm an elf**, enter the family code, and then:
+**Joining:** an admin copies the invite link from circle settings and sends it out. Whoever opens it signs in and taps **Ask to join**, and an admin lets them in. Making a new link stops the old one from working.
 
-- see claim status on every catalog card, plus a **Hide claimed** toggle,
-- can claim, mark as bought, add a note for other elves, or release a gift,
-- see the full Elf Shop dashboard.
+**The surprise rule** is enforced by the database (`firestore.rules`), not just hidden in the page: claims on your list can be read only by people who share a circle with you, and never by you.
 
-Elf mode is remembered on that device, so family only enters the code once.
+## Firebase setup (one time)
 
-**Change the family code** so Jude doesn't know it. The default is `northpole`. Have a family member pick a new code and run:
+Already done for the `christmas-circle` project:
 
-```bash
-node -e "console.log(require('crypto').createHash('sha256').update('newcode').digest('hex'))"
-```
+1. Created the project and a web app. The config is in `js/config.js` (safe to publish: it only identifies the project).
+2. Authentication → Sign-in method → **Google** enabled.
+3. Authentication → Settings → Authorized domains → **judemarkwell.github.io** added.
+4. Firestore Database created in production mode.
 
-Then paste the output into `familyCodeHash` in `js/config.js`. Use lowercase, because codes are compared in lowercase. Only the hash is stored in the repo. This is a deterrent, not real security: someone determined could still look at the database.
+Still to do:
 
-## Editing the list
+5. **Firestore Database → Rules**: paste in all of `firestore.rules`, then click **Publish**. Paste it again whenever this file changes.
 
-Everything lives in `data/items.json`. Each item:
+No paid plan is needed. Photos are shrunk to under ~850 KB and stored in the database itself.
 
-```json
-{
-  "id": "pb-paddle",                  // unique; don't change once someone has claimed it
-  "name": "Vatic Pro Prism Flash 16mm Paddle",
-  "category": "Pickleball",           // creates the filter chips automatically
-  "emoji": "🏓",
-  "url": "https://www.amazon.com/dp/B0BYMGYVTR",
-  "priority": 3,                      // 1 nice to have, 2 would love it, 3 top wish
-  "note": "Short description",
-  "price": 100,                       // optional
-  "details": ["16mm core"],           // optional bullet points (sizes, colors…)
-  "alternatives": [                   // optional cheaper picks
-    { "name": "…", "note": "…", "query": "search terms" }
-  ]
-}
-```
+## Editing
 
-Tip: trim Amazon links down to `https://www.amazon.com/dp/ASIN`. The site uses the ASIN to build the price-history link.
+- `js/app.js`: the screens
+- `js/store.js`: everything that talks to Firebase
+- `js/mock-store.js`: an offline stand-in for testing
+- `css/styles.css`: the look (colors, fonts and motion are variables at the top)
+- `data/items.json`: Jude's original list, offered once as "Import my starter list" when the name matches `starterListFor` in `js/config.js`
 
-## Memories
+### Test without Firebase
 
-Two ways to add photos:
-
-1. **Through the site:** tap **＋ Add a memory**. Photos are resized to about 1280px and saved to the database (or to this browser in demo mode).
-2. **Backlog in the repo:** drop images in `/memories` and list them in `data/memories.json`:
-   ```json
-   { "id": "2024-tree", "year": 2024, "caption": "Tree day", "image": "memories/2024-tree.jpg" }
-   ```
-
-## Run it locally
+Serve the folder and add `?mock` to the address. Add `&as=name` to be different people, and use two tabs to test inviting and claiming:
 
 ```bash
 python3 -m http.server 8000
-# open http://localhost:8000
+# http://localhost:8000/?mock&as=jude
+# http://localhost:8000/?mock&as=mom
 ```
 
-The page has to be served (not opened as a file) so it can load the JSON files.
+### Phone check
 
-## Phone check
-
-Run this before pushing UI changes. It opens every screen and form at phone sizes, simulates the on-screen keyboard both the Android way (page shrinks) and the iPhone or in-app way (keyboard covers the page), and fails if a field or the Save button is hidden, a tap target is under 44px, the page scrolls sideways, or there's a script error.
+Run this before pushing UI changes. It opens every screen and form at phone sizes against a test family. It simulates the on-screen keyboard both the Android way (page shrinks) and the iPhone or in-app way (keyboard covers the page). It fails if a field or the Save button is hidden, a tap target is under 44px, the page scrolls sideways, or there's a script error.
 
 ```bash
 pip install playwright && playwright install chromium
 python3 tests/mobile_check.py
 ```
 
-New forms go in the `FORMS` list at the top of the script.
+### Rules tests
 
-## Sharing claims with family (Firebase)
-
-Out of the box the site runs in **demo mode**: claims and memories are saved only in the browser you're using. To let everyone see the same claims live:
-
-1. Create a free project at [console.firebase.google.com](https://console.firebase.google.com), then add a **Web app**.
-2. Open **Firestore Database → Create database** (production mode).
-3. Paste the web app config into `firebase` in `js/config.js`.
-4. Set these Firestore rules (Rules tab):
-
-```
-rules_version = '2';
-service cloud.firestore {
-  match /databases/{db}/documents {
-    match /claims/{itemId} {
-      allow read: if true;
-      allow create, update: if request.resource.data.name is string
-                            && request.resource.data.name.size() <= 40;
-      allow delete: if true;
-    }
-    match /memories/{id} {
-      allow read, create, delete: if true;
-    }
-  }
-}
-```
-
-Claims use a transaction, so two people can't claim the same gift at once.
-
-## Deploy (GitHub Pages)
-
-Repo **Settings → Pages → Deploy from a branch → `main` / root**. The site will be at `https://judemarkwell.github.io/JudesChristmas/`.
-
-## Structure
-
-```
-index.html          page shell, tabs, modal
-css/styles.css      theme (colors and fonts are CSS variables at the top)
-js/config.js        owner name, family code hash, Firebase config
-js/store.js         storage: local (demo) or Firebase, same interface
-js/app.js           views, elf mode, claiming, memories, snow and countdown
-data/items.json     the wishlist
-data/memories.json  photos that ship with the site
-memories/           image files for those photos
-```
+`tests/rules.test.mjs` walks through founding a circle, inviting, approving, claiming and removing someone, and checks the rules allow and refuse the right things. It needs Java and the Firestore emulator, so run it on your own computer. The commands are at the top of the file.
