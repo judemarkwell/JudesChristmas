@@ -46,7 +46,12 @@ export function createMockStore() {
   return {
     mode: 'mock',
     onAuth(cb) { authCbs.add(cb); setTimeout(() => cb(isSignedIn() ? { ...me } : null), 0); return () => authCbs.delete(cb); },
-    async signIn() { localStorage.setItem(signedKey, '1'); authCbs.forEach((cb) => cb({ ...me })); },
+    async signIn() {
+      // ?mock&popup=blocked simulates a browser blocking the Google sign-in window.
+      if (params.get('popup') === 'blocked') throw Object.assign(new Error('blocked'), { code: 'auth/popup-blocked' });
+      localStorage.setItem(signedKey, '1');
+      authCbs.forEach((cb) => cb({ ...me }));
+    },
     async signOut() { localStorage.removeItem(signedKey); authCbs.forEach((cb) => cb(null)); },
     async ensureAccount(user) {
       mutate((db) => {

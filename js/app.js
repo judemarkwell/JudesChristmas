@@ -419,11 +419,37 @@ function renderLanding(r) {
       await state.store.signIn();
     } catch (err) {
       console.error(err);
-      toast(err?.code === 'auth/unauthorized-domain'
-        ? '🔒 This address isn’t on Firebase’s allowed domains yet.'
-        : '😬 Sign-in didn’t work. Try again, or open this page in Safari or Chrome.');
+      if (err?.code === 'auth/unauthorized-domain') toast('🔒 This address isn’t on Firebase’s allowed domains yet.');
+      else showSignInHelp(err?.code);
     } finally {
       btn.disabled = false;
+    }
+  });
+}
+
+function showSignInHelp(code) {
+  const blocked = code === 'auth/popup-blocked';
+  openModal(`
+    <h2>${blocked ? 'The sign-in window was blocked' : 'Sign-in didn’t open'}</h2>
+    <p class="muted">Google sign-in opens in a small window, and this browser stopped it.</p>
+    <ol class="next-steps">
+      <li><strong>Tap Sign in again</strong><span class="muted small">A second tap often works.</span></li>
+      <li><strong>Opened from a text, Instagram or Facebook?</strong>
+        <span class="muted small">Open the link in Safari or Chrome instead. Apps' built-in browsers often block Google sign-in.</span></li>
+      <li><strong>Still blocked on iPhone?</strong>
+        <span class="muted small">Settings → Apps → Safari → turn off <em>Block Pop-ups</em>, then try again.</span></li>
+    </ol>
+    <div class="form-actions">
+      <button type="button" class="btn btn-ghost" data-close>Close</button>
+      <button type="button" class="btn btn-primary" id="retry-sign-in">Try again</button>
+    </div>`);
+  $('#retry-sign-in').addEventListener('click', async () => {
+    try {
+      await state.store.signIn();
+      closeModal();
+    } catch (err) {
+      console.error(err);
+      toast('Still blocked. Try opening the link in Safari or Chrome.');
     }
   });
 }

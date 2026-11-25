@@ -60,25 +60,22 @@ export async function createStore() {
     (s) => ok(s.docs.map((d) => ({ id: d.id, ...d.data() }))), fail), cb);
   const strip = ({ id, ...rest }) => rest;
 
-  // Finish a redirect sign-in if one was used (popup blocked).
-  A.getRedirectResult(auth).catch(() => {});
-
   return {
     mode: 'firebase',
 
     // ----- auth -----
     onAuth(cb) { return A.onAuthStateChanged(auth, (u) => cb(toUser(u))); },
+    // Popup only. The redirect flow can't work here: the site (github.io) and Firebase's sign-in
+    // page (firebaseapp.com) are different sites, and Safari, Firefox and Chrome block the storage
+    // the redirect needs ("missing initial state"). If the popup is blocked, the app explains.
     async signIn() {
       const provider = new A.GoogleAuthProvider();
       provider.setCustomParameters({ prompt: 'select_account' });
       try {
         await A.signInWithPopup(auth, provider);
       } catch (err) {
-        if (['auth/popup-blocked', 'auth/operation-not-supported-in-this-environment'].includes(err.code)) {
-          await A.signInWithRedirect(auth, provider);
-        } else if (err.code !== 'auth/popup-closed-by-user' && err.code !== 'auth/cancelled-popup-request') {
-          throw err;
-        }
+        if (err.code === 'auth/popup-closed-by-user' || err.code === 'auth/cancelled-popup-request') return;
+        throw err;
       }
     },
     signOut() { return A.signOut(auth); },
