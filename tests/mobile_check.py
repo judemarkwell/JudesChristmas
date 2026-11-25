@@ -107,7 +107,7 @@ def check(page, phone, w, h, problems):
     def fail(kind, where, detail):
         problems.append(f'[{phone}] {kind}: {where}: {detail}')
 
-    page.goto(BASE)
+    page.goto(f'{BASE}?mock&as=guest')
     page.evaluate("""(db) => {
       localStorage.clear();
       localStorage.setItem('mock.db', JSON.stringify(db));
@@ -152,6 +152,8 @@ def check(page, phone, w, h, problems):
             page.set_viewport_size({'width': w, 'height': h})
         for t in page.evaluate(TAP_TARGETS):
             fail('tap-size', name, f"'{t['name']}' is {t['h']}px tall")
+        if page.evaluate("(() => { const m = document.getElementById('modal'); return m.scrollWidth > m.clientWidth + 1; })()"):
+            fail('overflow', name, 'the sheet is wider than the screen')
         page.keyboard.press('Escape')
 
 

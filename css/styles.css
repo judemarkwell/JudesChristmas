@@ -505,6 +505,13 @@ body.no-nav .site-footer { padding-bottom: 2rem; }
 .row-note.warn { color: #8a5a00; font-weight: 700; }
 .elf-name { display: flex; align-items: center; gap: 0.5rem; }
 
+/* ===== Circle-ready sheet ===== */
+.celebrate { text-align: center; }
+.celebrate h2 { margin-right: 0 !important; }
+.next-steps { margin: 1rem 0 0.5rem; padding-left: 1.3rem; display: grid; grid-template-columns: minmax(0, 1fr); gap: 1rem; }
+.next-steps li { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.2rem; min-width: 0; }
+.next-steps li::marker { font-weight: 800; color: var(--red); }
+
 /* ===== Shop ===== */
 .locked {
   text-align: center;
@@ -655,7 +662,8 @@ body.no-nav .site-footer { padding-bottom: 2rem; }
 }
 .form textarea { resize: vertical; line-height: 1.4; }
 .form input:focus, .form textarea:focus { outline: none; border-color: var(--gold); }
-.form input[type=file] { font: 600 0.9rem var(--font-body); min-height: 44px; }
+.form input[type=file] { font: 600 0.9rem var(--font-body); min-height: 44px; width: 100%; max-width: 100%; }
+.form-row > *, .form-grid > *, .form > * { min-width: 0; }
 .form .check { display: flex; align-items: center; gap: 0.6rem; min-height: 44px; }
 .form .check input { width: 22px; height: 22px; accent-color: var(--green); }
 .form .hint { font-weight: 600; font-size: 0.82rem; color: var(--muted); }

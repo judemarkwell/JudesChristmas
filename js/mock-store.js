@@ -76,7 +76,7 @@ export function createMockStore() {
         }, memories: {} };
         db.index[user.uid].circles.push(cid);
         db.invites[code] = { circleId: cid, circleName: name, createdBy: user.uid };
-        return cid;
+        return { id: cid, code };
       });
     },
     async renameCircle(cid, name) { mutate((db) => { db.circles[cid].name = name; }); },

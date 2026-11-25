@@ -485,18 +485,58 @@ async function createCircleFromForm(e) {
   const name = String(new FormData(e.target).get('name') || '').trim();
   if (!name) return;
   const btn = e.target.querySelector('[type=submit]');
+  const label = btn.textContent;
   btn.disabled = true;
+  btn.textContent = 'Creating…';
   try {
-    const cid = await state.store.createCircle({ ...state.user, name: state.profile?.name || state.user.name }, name);
-    state.cid = cid;
-    ls.set('jc.circle', cid);
-    closeModal();
-    toast(`🎄 ${name} is ready. Invite your family!`);
-    go('#circle');
+    const { id, code } = await state.store.createCircle({ ...state.user, name: state.profile?.name || state.user.name }, name);
+    state.cid = id;
+    ls.set('jc.circle', id);
+    go('#family');
+    showCircleReady(name, code);
   } catch (err) {
     oops(err);
     btn.disabled = false;
+    btn.textContent = label;
   }
+}
+
+function showCircleReady(name, code) {
+  const link = inviteLink(code);
+  openModal(`
+    <div class="celebrate">
+      <div class="empty-emoji" aria-hidden="true">🎄</div>
+      <h2>${esc(name)} is ready!</h2>
+      <p class="muted">You're its admin. Two things to do next:</p>
+    </div>
+    <ol class="next-steps">
+      <li>
+        <strong>Invite your family</strong>
+        <span class="muted small">Send them this link. They sign in and ask to join, and you let them in.</span>
+        <div class="invite-box">
+          <input id="ready-link" readonly value="${esc(link)}" aria-label="Invite link">
+          <button type="button" class="btn btn-primary" id="ready-copy">Copy</button>
+        </div>
+      </li>
+      <li>
+        <strong>Add your wishes and sizes</strong>
+        <span class="muted small">On the My list tab.</span>
+      </li>
+    </ol>
+    <div class="form-actions">
+      <button type="button" class="btn btn-ghost" data-close>Later</button>
+      <button type="button" class="btn btn-secondary" id="ready-mine">Go to My list</button>
+    </div>`);
+  $('#ready-copy').addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(link);
+      toast('🔗 Copied. Send it to family!');
+    } catch {
+      $('#ready-link').select();
+      toast('Select and copy the link.');
+    }
+  });
+  $('#ready-mine').addEventListener('click', () => { closeModal(); go('#mine'); });
 }
 
 // ----- joining -----
@@ -555,7 +595,7 @@ function renderFamily() {
   view().innerHTML = `
     <section class="family">
       <div class="hero" ${enterAttr()}>
-        <h1 class="enter-1">${esc(c?.name || 'Your circle')}</h1>
+        <h1 class="enter-1">${c ? esc(c.name) : '<span class="muted">Loading…</span>'}</h1>
         <div class="countdown enter-2">${countdownHTML()}</div>
       </div>
       ${state.circleIds.length > 1 ? `
@@ -1110,6 +1150,10 @@ function renderShop() {
 // ----- circle settings -----
 function renderCircleSettings() {
   const c = circle();
+  if (!c) {
+    view().innerHTML = '<p class="loading">Opening circle settings…</p>';
+    return;
+  }
   const admin = isAdmin();
   const waiting = pendingMembers();
   const people = activeMembers().sort((a, b) => a.name.localeCompare(b.name));
@@ -1185,7 +1229,7 @@ function renderCircleSettings() {
   });
   $('#new-invite')?.addEventListener('click', async () => {
     if (!(await askConfirm('Make a new invite link?', 'The current link will stop working. People who already asked to join stay on the waiting list.', 'Make new link'))) return;
-    try { await state.store.newInvite(state.user, { ...c, id: state.cid }); toast('🔗 New link ready'); } catch (err) { oops(err); }
+    try { await state.store.newInvite(state.user, { ...c, id: state.cid }); toast('🔗 New link ready. The old one no longer works.'); } catch (err) { oops(err); }
   });
   view().querySelectorAll('[data-approve]').forEach((b) => b.addEventListener('click', async () => {
     b.disabled = true;

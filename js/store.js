@@ -31,12 +31,33 @@ export async function createStore() {
     email: u.email || '',
   });
 
-  const watchDoc = (ref, cb) => onSnapshot(ref,
-    (s) => cb(s.exists() ? { id: s.id, ...s.data() } : null),
-    () => cb(null));
-  const watchCol = (ref, cb) => onSnapshot(ref,
-    (s) => cb(s.docs.map((d) => ({ id: d.id, ...d.data() }))),
-    () => cb(null));
+  // A listener refused by the rules stops for good. Right after a write (creating a circle,
+  // being approved), the first read can reach the server a moment before the write has
+  // landed and be refused, so retry a few times before reporting "no access".
+  const resilient = (listen, cb) => {
+    let stop = null;
+    let stopped = false;
+    let tries = 0;
+    let timer;
+    const run = () => {
+      stop = listen((v) => { tries = 0; cb(v); }, (err) => {
+        if (stopped) return;
+        if (err?.code === 'permission-denied' && tries < 5) {
+          tries += 1;
+          timer = setTimeout(run, 500 * 2 ** (tries - 1));
+        } else {
+          console.warn('Listener stopped', err);
+          cb(null);
+        }
+      });
+    };
+    run();
+    return () => { stopped = true; clearTimeout(timer); stop?.(); };
+  };
+  const watchDoc = (ref, cb) => resilient((ok, fail) => onSnapshot(ref,
+    (s) => ok(s.exists() ? { id: s.id, ...s.data() } : null), fail), cb);
+  const watchCol = (ref, cb) => resilient((ok, fail) => onSnapshot(ref,
+    (s) => ok(s.docs.map((d) => ({ id: d.id, ...d.data() }))), fail), cb);
   const strip = ({ id, ...rest }) => rest;
 
   // Finish a redirect sign-in if one was used (popup blocked).
@@ -77,7 +98,13 @@ export async function createStore() {
     },
 
     // ----- circles -----
-    watchIndex(uid, cb) { return watchDoc(doc(db, 'index', uid), (d) => cb(d ? d.circles || [] : [])); },
+    // Only act on the server's copy, so a circle isn't opened before its write has landed.
+    watchIndex(uid, cb) {
+      return resilient((ok, fail) => onSnapshot(doc(db, 'index', uid), (s) => {
+        if (s.metadata.hasPendingWrites) return;
+        ok(s.exists() ? s.data().circles || [] : []);
+      }, fail), cb);
+    },
     watchCircle(cid, cb) { return watchDoc(doc(db, 'circles', cid), cb); },
     watchMembers(cid, cb) { return watchCol(collection(db, 'circles', cid, 'members'), cb); },
     watchMembership(cid, uid, cb) { return watchDoc(doc(db, 'circles', cid, 'members', uid), cb); },
@@ -93,13 +120,13 @@ export async function createStore() {
       b.update(doc(db, 'index', user.uid), { circles: arrayUnion(ref.id), changed: ref.id });
       b.set(doc(db, 'invites', code), { circleId: ref.id, circleName: name, createdBy: user.uid });
       await b.commit();
-      return ref.id;
+      return { id: ref.id, code };
     },
     async renameCircle(cid, name) { await updateDoc(doc(db, 'circles', cid), { name }); },
     async newInvite(user, circle) {
       const code = newCode();
       const b = writeBatch(db);
-      b.set(doc(db, 'invites', code), { circleId: circle.id, circleName: circle.name, createdBy: user.uid });
+      b.set(doc(db, 'invites', code), { circleId: circle.id, circleName: circle.name || '', createdBy: user.uid });
       b.update(doc(db, 'circles', circle.id), { inviteCode: code });
       if (circle.inviteCode) b.delete(doc(db, 'invites', circle.inviteCode));
       await b.commit();
@@ -156,11 +183,11 @@ export async function createStore() {
 
     // ----- claims (never requested for your own list) -----
     watchClaims(owner, cb) {
-      return onSnapshot(collection(db, 'users', owner, 'claims'), (s) => {
+      return resilient((ok, fail) => onSnapshot(collection(db, 'users', owner, 'claims'), (s) => {
         const out = {};
         s.forEach((d) => { out[d.id] = d.data(); });
-        cb(out);
-      }, () => cb(null));
+        ok(out);
+      }, fail), cb);
     },
     async claim(owner, itemId, data) {
       const ref = doc(db, 'users', owner, 'claims', itemId);
