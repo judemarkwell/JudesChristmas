@@ -39,6 +39,7 @@ No paid plan is needed. Photos are shrunk to under ~850 KB and stored in the dat
 - `js/app.js`: the screens
 - `js/store.js`: everything that talks to Firebase
 - `js/mock-store.js`: an offline stand-in for testing
+- `js/links.js`: reads pasted product links, removes tracking junk, and pulls a title from the address when it has one (`node tests/links.test.mjs` tests it)
 - `css/styles.css`: the look (colors, fonts and motion are variables at the top)
 - `data/items.json`: Jude's original list, offered once as "Import my starter list" when the name matches `starterListFor` in `js/config.js`
 

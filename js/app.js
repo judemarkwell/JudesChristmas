@@ -1,5 +1,6 @@
 import { CONFIG } from './config.js';
 import { createStore } from './store.js';
+import { readLink, asinOf } from './links.js';
 
 // ---------- helpers ----------
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -18,7 +19,6 @@ const ls = {
   set(k, v) { try { localStorage.setItem(k, v); } catch { /* private mode */ } },
 };
 const shopSearch = (q) => `https://www.google.com/search?tbm=shop&q=${encodeURIComponent(q)}`;
-const asinOf = (url) => (String(url).match(/\/(?:dp|gp\/product|gp\/aw\/d)\/([A-Z0-9]{10})/i) || [])[1];
 const slug = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'wish';
 const firstName = (n) => String(n || '').trim().split(/\s+/)[0] || 'Friend';
 
@@ -28,28 +28,6 @@ async function loadJSON(path, fallback) {
     if (!res.ok) throw new Error(res.status);
     return await res.json();
   } catch { return fallback; }
-}
-
-// Turns a pasted shopping link into a short link plus a best-guess title.
-function readLink(raw) {
-  let url;
-  const t = raw.trim();
-  try { url = new URL(t.startsWith('http') ? t : `https://${t}`); } catch { return null; }
-  const asin = asinOf(url.href);
-  const isAmazon = /(^|\.)amazon\./i.test(url.hostname);
-  let title = '';
-  if (isAmazon) {
-    const parts = url.pathname.split('/').filter(Boolean);
-    const dpAt = parts.findIndex((p) => p === 'dp');
-    const words = dpAt > 0 ? parts[dpAt - 1] : '';
-    if (words && !/^(gp|dp)$/i.test(words)) title = words.replace(/-/g, ' ');
-  } else {
-    const last = url.pathname.split('/').filter(Boolean).pop() || '';
-    if (/[a-z]-[a-z]/i.test(last)) title = last.replace(/\.[a-z]+$/i, '').replace(/[-_]+/g, ' ');
-  }
-  title = title.replace(/\b\w/g, (c) => c.toUpperCase()).trim();
-  const clean = isAmazon && asin ? `https://www.amazon.com/dp/${asin}` : `${url.origin}${url.pathname}`;
-  return { url: clean, title, store: url.hostname.replace(/^www\./, '') };
 }
 
 const ICONS = ['🎁', '🖱️', '⌨️', '🎧', '🖥️', '💻', '📱', '🔌', '🔋', '⚡', '🎮', '📚',
@@ -885,7 +863,7 @@ function openItemEditor(existing) {
     <form id="item-form" class="form" novalidate>
       <label>Link
         <input name="url" type="url" inputmode="url" placeholder="Paste a product link" value="${esc(it.url)}">
-        <span class="hint" id="link-hint">Amazon links fill in the title for you.</span>
+        <span class="hint" id="link-hint">Paste a link and the title fills in when the store's address includes it.</span>
       </label>
       <label>Title
         <input name="name" required maxlength="80" placeholder="What is it?" value="${esc(it.name)}">
@@ -938,13 +916,23 @@ function openItemEditor(existing) {
   const urlInput = form.elements.url;
   const nameInput = form.elements.name;
   const hint = $('#link-hint');
+  let autoTitle = '';
   const onLink = () => {
-    if (!urlInput.value.trim()) { hint.textContent = 'Amazon links fill in the title for you.'; return; }
+    if (!urlInput.value.trim()) { hint.textContent = 'Paste a link and the title fills in when the store\'s address includes it.'; return; }
     const info = readLink(urlInput.value);
     if (!info) { hint.textContent = 'That doesn’t look like a link.'; return; }
     urlInput.value = info.url;
-    if (info.title && !nameInput.value.trim()) nameInput.value = info.title;
-    hint.textContent = info.title ? `From ${info.store}. Tidy the title if you like.` : `From ${info.store}.`;
+    // Fill the title only if it's empty or still the one we filled from a previous link.
+    const current = nameInput.value.trim();
+    if (info.title && (!current || current === autoTitle)) {
+      nameInput.value = info.title;
+      autoTitle = info.title;
+      hint.textContent = `From ${info.store}. Tidy the title if you like.`;
+    } else if (info.title) {
+      hint.textContent = `From ${info.store}.`;
+    } else {
+      hint.textContent = `From ${info.store}. This link doesn't include the product's name, so type a title.`;
+    }
   };
   urlInput.addEventListener('paste', () => setTimeout(onLink, 0));
   urlInput.addEventListener('change', onLink);
