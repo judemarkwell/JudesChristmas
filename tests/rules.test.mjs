@@ -4,7 +4,8 @@
 //   npx firebase emulators:exec --only firestore --project demo-gifts "node rules.test.mjs"
 //
 // It walks through the real flows (found a circle, invite, approve, claim) and checks that
-// the owner of a list can never read its claims.
+// the owner of a list can never read its claims, and that people in other circles see a gift
+// is taken without seeing who took it.
 
 import { readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
@@ -21,11 +22,12 @@ const as = (uid) => env.authenticatedContext(uid).firestore();
 const jude = as('jude');
 const mom = as('mom');
 const eve = as('eve'); // never invited
+const sam = as('sam'); // in Jude's Friends circle only, never in a circle with Mom
 let passed = 0;
 const test = async (name, fn) => { await fn(); passed += 1; console.log('ok -', name); };
 
 // Every account starts with an empty index.
-for (const [db, uid] of [[jude, 'jude'], [mom, 'mom'], [eve, 'eve']]) {
+for (const [db, uid] of [[jude, 'jude'], [mom, 'mom'], [eve, 'eve'], [sam, 'sam']]) {
   await assertSucceeds(setDoc(doc(db, 'index', uid), { circles: [], changed: '' }));
   await assertSucceeds(setDoc(doc(db, 'users', uid), { name: uid, visibility: 'circle' }));
 }
@@ -75,14 +77,51 @@ await test('mom can read Jude\'s list and profile; eve cannot', async () => {
   await assertFails(getDoc(doc(eve, 'users', 'jude')));
 });
 
-await test('mom claims the paddle; Jude can never see claims on his list', async () => {
-  await assertSucceeds(setDoc(doc(mom, 'users/jude/claims', 'paddle'), { by: 'mom', owner: 'jude', purchased: false }));
-  await assertFails(getDoc(doc(jude, 'users/jude/claims', 'paddle')));
-  await assertFails(getDocs(collection(jude, 'users/jude/claims')));
-  await assertSucceeds(getDoc(doc(mom, 'users/jude/claims', 'paddle')));
+await test('Jude also starts a Friends circle and lets Sam in', async () => {
+  const b = writeBatch(jude);
+  b.set(doc(jude, 'circles', 'friends'), { name: 'Friends', createdBy: 'jude', inviteCode: 'code456' });
+  b.set(doc(jude, 'circles/friends/members', 'jude'), { name: 'Jude', role: 'admin', status: 'active' });
+  b.update(doc(jude, 'index', 'jude'), { circles: arrayUnion('friends'), changed: 'friends' });
+  b.set(doc(jude, 'invites', 'code456'), { circleId: 'friends', circleName: 'Friends', createdBy: 'jude' });
+  await assertSucceeds(b.commit());
+  await assertSucceeds(setDoc(doc(sam, 'circles/friends/members', 'sam'), { name: 'Sam', role: 'member', status: 'pending', code: 'code456' }));
+  const a = writeBatch(jude);
+  a.update(doc(jude, 'circles/friends/members', 'sam'), { status: 'active' });
+  a.update(doc(jude, 'index', 'sam'), { circles: arrayUnion('friends'), changed: 'friends' });
+  await assertSucceeds(a.commit());
 });
 
-await test('nobody can claim on someone else\'s behalf or edit another claim', async () => {
+await test('mom claims the paddle: marker plus private details', async () => {
+  const b = writeBatch(mom);
+  b.set(doc(mom, 'users/jude/claims', 'paddle'), { by: 'mom', owner: 'jude', claimedAt: 1 });
+  b.set(doc(mom, 'users/jude/claimDetails', 'paddle'), { by: 'mom', owner: 'jude', byName: 'Mom', note: 'blue one', purchased: false });
+  await assertSucceeds(b.commit());
+});
+
+await test('Jude can never see claims or details on his own list', async () => {
+  await assertFails(getDoc(doc(jude, 'users/jude/claims', 'paddle')));
+  await assertFails(getDocs(collection(jude, 'users/jude/claims')));
+  await assertFails(getDoc(doc(jude, 'users/jude/claimDetails', 'paddle')));
+});
+
+await test('Sam (other circle) sees the paddle is taken, but not who or the note', async () => {
+  await assertSucceeds(getDoc(doc(sam, 'users/jude/claims', 'paddle')));
+  await assertSucceeds(getDocs(collection(sam, 'users/jude/claims')));
+  await assertFails(getDoc(doc(sam, 'users/jude/claimDetails', 'paddle')));
+  await assertFails(getDocs(collection(sam, 'users/jude/claimDetails')));
+});
+
+await test('Mom sees her own claim details; Sam cannot claim the same item', async () => {
+  await assertSucceeds(getDoc(doc(mom, 'users/jude/claimDetails', 'paddle')));
+  await assertFails(setDoc(doc(sam, 'users/jude/claims', 'paddle'), { by: 'sam', owner: 'jude', claimedAt: 2 }));
+});
+
+await test('details can only sit on your own marker, and markers hold no names', async () => {
+  await assertFails(setDoc(doc(sam, 'users/jude/claimDetails', 'paddle'), { by: 'sam', owner: 'jude', note: 'x' }));
+  await assertFails(setDoc(doc(sam, 'users/jude/claims', 'socks'), { by: 'sam', owner: 'jude', byName: 'Sam' }));
+});
+
+await test('nobody can claim on someone else\'s behalf', async () => {
   await assertFails(setDoc(doc(mom, 'users/jude/claims', 'other'), { by: 'jude', owner: 'jude' }));
   await assertFails(setDoc(doc(eve, 'users/jude/claims', 'other'), { by: 'eve', owner: 'jude' }));
 });

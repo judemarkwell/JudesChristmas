@@ -133,12 +133,22 @@ export function createMockStore() {
     async deleteItem(uid, id) { mutate((db) => { delete db.items[uid][id]; }); },
 
     watchClaims(owner, cb) {
-      return watch((db) => (owner !== me.uid && shares(db, owner) ? db.claims[owner] || {} : null), cb);
+      // Mirrors the rules: everyone who shares a circle with the owner sees that an item is
+      // taken; only people who also share a circle with the claimer see who, notes and bought.
+      return watch((db) => {
+        if (owner === me.uid || !shares(db, owner)) return null;
+        const out = {};
+        for (const [id, c] of Object.entries(db.claims[owner] || {})) {
+          out[id] = c.by === me.uid || shares(db, c.by)
+            ? c : { by: c.by, owner: c.owner, claimedAt: c.claimedAt, hidden: true };
+        }
+        return out;
+      }, cb);
     },
     async claim(owner, itemId, data) {
       mutate((db) => {
         if (db.claims[owner][itemId]) throw new Error('already-claimed');
-        db.claims[owner][itemId] = { purchased: false, note: '', ...data, owner, claimedAt: Date.now() };
+        db.claims[owner][itemId] = { purchased: false, note: '', ...data, by: me.uid, owner, claimedAt: Date.now() };
       });
     },
     async updateClaim(owner, itemId, patch) { mutate((db) => Object.assign(db.claims[owner][itemId], patch)); },

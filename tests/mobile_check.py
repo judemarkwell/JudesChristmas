@@ -46,6 +46,7 @@ VIEWS = [
     ('jude', '#circles'), ('jude', '#circle-c1'), ('jude', '#settings-c1'), ('jude', '#mine'),
     ('jude', '#shop'), ('jude', '#profile'), ('jude', '#person-u-mom'), ('jude', '#list-u-mom'),
     ('mom', '#circle-c1'), ('mom', '#settings-c1'), ('mom', '#person-u-jude'), ('mom', '#list-u-jude'), ('mom', '#shop'),
+    ('tia', '#circles'), ('tia', '#list-u-jude'),
 ]
 # Each form: who, where, how to open it, then the selector of its <form>.
 FORMS = [
@@ -55,6 +56,7 @@ FORMS = [
     ('Edit a wish', 'jude', '#mine', ['[data-action=edit] >> nth=0'], '#item-form'),
     ('Edit profile', 'jude', '#profile', ['#edit-profile'], '#profile-form'),
     ('Claim a gift', 'mom', '#list-u-jude', ['[data-action=claim] >> nth=0'], '#claim-form'),
+    ('Manage a claim', 'mom', '#list-u-jude', ['[data-action=manage] >> nth=0'], '#manage-form'),
     ('Circle memory', 'jude', '#circle-c1', ['#add-memory'], '#memory-form'),
     ('Profile memory', 'jude', '#profile', ['#post-memory'], '#memory-form'),
     ('Rename circle', 'jude', '#settings-c1', [], '#rename-form'),
@@ -67,16 +69,23 @@ def fixture():
     profile = lambda name: {'name': name, 'photoURL': '', 'birthday': '', 'visibility': 'circle',
                             'sizes': {'shirt': 'L', 'shoe': '10.5'}, 'favorites': {'colors': 'Green'}, 'avoid': '', 'payback': {}}
     return {
-        'users': {'u-jude': profile('Jude'), 'u-mom': profile('Mom'), 'u-sam': profile('Sam')},
-        'index': {'u-jude': {'circles': ['c1']}, 'u-mom': {'circles': ['c1']}, 'u-sam': {'circles': []}},
+        'users': {'u-jude': profile('Jude'), 'u-mom': profile('Mom'), 'u-sam': profile('Sam'), 'u-tia': profile('Tia')},
+        'index': {'u-jude': {'circles': ['c1', 'c2']}, 'u-mom': {'circles': ['c1']}, 'u-sam': {'circles': []},
+                  'u-tia': {'circles': ['c2']}},
         'circles': {'c1': {'name': 'Markwell Family', 'createdBy': 'u-jude', 'inviteCode': 'testcode12345678',
                            'members': {'u-jude': member('Jude', 'admin'), 'u-mom': member('Mom'),
                                        'u-sam': member('Sam', status='pending')},
-                           'memories': {}}},
+                           'memories': {}},
+                    # Friends: Jude and Tia. Tia shares no circle with Mom.
+                    'c2': {'name': 'Friends', 'createdBy': 'u-jude', 'inviteCode': 'friendscode1234',
+                           'members': {'u-jude': member('Jude', 'admin'), 'u-tia': member('Tia')}, 'memories': {}}},
         'invites': {'testcode12345678': {'circleId': 'c1', 'circleName': 'Markwell Family', 'createdBy': 'u-jude'}},
         'items': {'u-jude': {it['id']: {k: v for k, v in it.items() if k != 'id'} for it in items},
                   'u-mom': {'scarf': {'name': 'Wool scarf', 'emoji': '🧣', 'priority': 2}}, 'u-sam': {}},
-        'claims': {'u-jude': {}, 'u-mom': {}, 'u-sam': {}},
+        # Mom has claimed Jude's first wish.
+        'claims': {'u-jude': {items[0]['id']: {'by': 'u-mom', 'owner': 'u-jude', 'byName': 'Mom', 'itemName': items[0]['name'],
+                                               'note': 'getting the black one', 'purchased': False, 'claimedAt': 1}},
+                   'u-mom': {}, 'u-sam': {}, 'u-tia': {}},
         'pmem': {},
     }
 
@@ -120,7 +129,7 @@ def check(page, phone, w, h, problems):
     page.evaluate("""(db) => {
       localStorage.clear();
       localStorage.setItem('mock.db', JSON.stringify(db));
-      for (const who of ['jude', 'mom', 'newbie']) localStorage.setItem('mock.signedIn.' + who, '1');
+      for (const who of ['jude', 'mom', 'newbie', 'tia']) localStorage.setItem('mock.signedIn.' + who, '1');
     }""", fixture())
 
     for who, hash_ in VIEWS:

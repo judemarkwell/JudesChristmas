@@ -60,6 +60,20 @@ export async function createStore() {
     (s) => ok(s.docs.map((d) => ({ id: d.id, ...d.data() }))), fail), cb);
   const strip = ({ id, ...rest }) => rest;
 
+  // Claims made before claim details were split out kept the name and note on the marker.
+  // The person who made one moves those details into claimDetails the next time they open the app.
+  const migrating = new Set();
+  function migrateClaim(owner, itemId, data) {
+    const extra = Object.keys(data).some((k) => !['by', 'owner', 'claimedAt'].includes(k));
+    const key = `${owner}/${itemId}`;
+    if (!extra || data.by !== auth.currentUser?.uid || migrating.has(key)) return;
+    migrating.add(key);
+    const b = writeBatch(db);
+    b.set(doc(db, 'users', owner, 'claimDetails', itemId), { purchased: false, note: '', ...data });
+    b.set(doc(db, 'users', owner, 'claims', itemId), { by: data.by, owner: data.owner || owner, claimedAt: data.claimedAt || Date.now() });
+    b.commit().catch((err) => console.warn('Claim migration failed', err)).finally(() => migrating.delete(key));
+  }
+
   return {
     mode: 'firebase',
 
@@ -179,23 +193,86 @@ export async function createStore() {
     async deleteItem(uid, id) { await deleteDoc(doc(db, 'users', uid, 'items', id)); },
 
     // ----- claims (never requested for your own list) -----
+    // A claim is two documents:
+    //   claims/{itemId}        a marker that the item is taken: { by, owner, claimedAt }.
+    //                          Everyone who shares a circle with the owner can read it.
+    //   claimDetails/{itemId}  who, their note, and whether it's bought. Readable only by
+    //                          people who also share a circle with the person who claimed it.
+    // So a gift claimed in one circle shows as taken in every circle, but people in other
+    // circles just see "claimed by someone in another circle".
     watchClaims(owner, cb) {
-      return resilient((ok, fail) => onSnapshot(collection(db, 'users', owner, 'claims'), (s) => {
+      const markers = {};
+      const details = {};
+      const detailSubs = {};
+      let ready = false;
+      const emit = () => {
+        if (!ready) return;
         const out = {};
-        s.forEach((d) => { out[d.id] = d.data(); });
-        ok(out);
-      }, fail), cb);
+        for (const [id, m] of Object.entries(markers)) {
+          const d = details[id];
+          out[id] = d === undefined ? { ...m, loading: true } : d === null ? { ...m, hidden: true } : { ...d, ...m };
+        }
+        cb(out);
+      };
+      const watchDetail = (id, by) => {
+        let tries = 0;
+        const listen = () => onSnapshot(doc(db, 'users', owner, 'claimDetails', id), (s) => {
+          details[id] = s.exists() ? s.data() : null;
+          emit();
+        }, (err) => {
+          // Your own brand-new claim can be read a moment before its write lands: retry briefly.
+          if (err?.code === 'permission-denied' && by === auth.currentUser?.uid && tries < 3) {
+            tries += 1;
+            detailSubs[id] = setTimeout(() => { detailSubs[id] = listen(); }, 400 * tries);
+            return;
+          }
+          details[id] = null;
+          emit();
+        });
+        detailSubs[id] = listen();
+      };
+      const stopDetail = (id) => {
+        const s = detailSubs[id];
+        if (typeof s === 'function') s(); else clearTimeout(s);
+        delete detailSubs[id];
+        delete details[id];
+      };
+      const stopMarkers = resilient((ok, fail) => onSnapshot(collection(db, 'users', owner, 'claims'), (s) => {
+        const seen = new Set();
+        s.forEach((d) => {
+          const data = d.data();
+          seen.add(d.id);
+          migrateClaim(owner, d.id, data);
+          markers[d.id] = { by: data.by, owner: data.owner, claimedAt: data.claimedAt };
+          if (!(d.id in detailSubs)) watchDetail(d.id, data.by);
+        });
+        for (const id of Object.keys(markers)) if (!seen.has(id)) { delete markers[id]; stopDetail(id); }
+        ready = true;
+        ok();
+      }, fail), (v) => { if (v === null) cb(null); else emit(); });
+      return () => { stopMarkers(); Object.keys(detailSubs).forEach(stopDetail); };
     },
     async claim(owner, itemId, data) {
-      const ref = doc(db, 'users', owner, 'claims', itemId);
+      const marker = doc(db, 'users', owner, 'claims', itemId);
+      const detail = doc(db, 'users', owner, 'claimDetails', itemId);
+      const by = auth.currentUser.uid;
       await runTransaction(db, async (tx) => {
-        const s = await tx.get(ref);
+        const s = await tx.get(marker);
         if (s.exists()) throw new Error('already-claimed');
-        tx.set(ref, { purchased: false, note: '', ...data, owner, claimedAt: Date.now() });
+        const claimedAt = Date.now();
+        tx.set(marker, { by, owner, claimedAt });
+        tx.set(detail, { purchased: false, note: '', ...data, by, owner, claimedAt });
       });
     },
-    async updateClaim(owner, itemId, patch) { await updateDoc(doc(db, 'users', owner, 'claims', itemId), patch); },
-    async unclaim(owner, itemId) { await deleteDoc(doc(db, 'users', owner, 'claims', itemId)); },
+    async updateClaim(owner, itemId, patch) {
+      await updateDoc(doc(db, 'users', owner, 'claimDetails', itemId), patch);
+    },
+    async unclaim(owner, itemId) {
+      const b = writeBatch(db);
+      b.delete(doc(db, 'users', owner, 'claimDetails', itemId));
+      b.delete(doc(db, 'users', owner, 'claims', itemId));
+      await b.commit();
+    },
 
     // Only the creator can do this (enforced by the rules). Removes everyone first, in small
     // batches so each stays well inside the rules' per-write lookup limit, then the circle.

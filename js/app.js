@@ -1203,6 +1203,8 @@ function cardHTML(item, ownerUid, isOwner, claim) {
   let mainBtn = '';
   if (isOwner) {
     mainBtn = `<button type="button" class="btn btn-ghost" data-action="edit" data-id="${esc(item.id)}" aria-label="Edit ${esc(item.name)}">✏️ Edit</button>`;
+  } else if (claim && (claim.hidden || claim.loading)) {
+    status = `<p class="status claimed">🔖 Claimed by ${claim.loading ? '…' : 'someone in another circle'}</p>`;
   } else if (claim) {
     status = `<p class="status ${claim.purchased ? 'bought' : 'claimed'}">${claim.purchased ? '🎁 Bought' : '🔖 Claimed'} by ${mine ? 'you' : esc(firstName(claim.byName))}</p>`;
     mainBtn = mine ? `<button type="button" class="btn btn-secondary" data-action="manage" data-id="${esc(item.id)}">Manage</button>` : '';

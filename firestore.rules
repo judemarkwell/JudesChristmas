@@ -2,8 +2,10 @@ rules_version = '2';
 
 // Gift Circles security rules. Paste into Firebase console → Firestore Database → Rules → Publish.
 //
-// The key promise: you can see claims on a wishlist only if you share an active circle
-// with its owner AND you are not the owner. The owner can never read claims on their own list.
+// The key promises: you can see that an item on a wishlist is claimed only if you share an
+// active circle with its owner AND you are not the owner; you see WHO claimed it (and their
+// note and bought status) only if you also share a circle with the person who claimed it.
+// The owner can never read claims on their own list.
 //
 // Data:
 //   circles/{cid}                 name, inviteCode, createdBy        (active members read)
@@ -14,7 +16,9 @@ rules_version = '2';
 //   users/{uid}                   profile: sizes, favorites, visibility…
 //   users/{uid}/items/{id}        the wishlist
 //   users/{uid}/memories/{id}     photos on a profile (posted there, or saved from a circle)
-//   users/{uid}/claims/{itemId}   who is buying what (never readable by uid)
+//   users/{uid}/claims/{itemId}   "this item is taken" (never readable by uid)
+//   users/{uid}/claimDetails/{id} who's buying it, their note, bought or not: only for people who
+//                                 share a circle with both uid and the buyer (never uid)
 //
 // index/{uid} is what "shares a circle" checks against. Only an admin approving someone (or the
 // circle's founder) can add a circle to it, and only removing someone from a circle (or leaving)
@@ -31,6 +35,7 @@ service cloud.firestore {
     function indexPath(uid) { return /databases/$(database)/documents/index/$(uid); }
     function userPath(uid) { return /databases/$(database)/documents/users/$(uid); }
     function invitePath(code) { return /databases/$(database)/documents/invites/$(code); }
+    function claimPath(owner, itemId) { return /databases/$(database)/documents/users/$(owner)/claims/$(itemId); }
 
     function isActive(cid) {
       return signedIn() && exists(memberPath(cid, me()))
@@ -188,15 +193,30 @@ service cloud.firestore {
         allow delete: if signedIn() && me() == uid;
       }
 
+      // A claim is a public marker plus private details (see the top of this file).
+      // The marker says only that the item is taken, so nobody in any circle doubles up.
       match /claims/{itemId} {
         // Never the owner. Only people who share a circle with them.
         allow read: if signedIn() && me() != uid && sharesCircle(uid);
-        allow create: if signedIn() && me() != uid && sharesCircle(uid)
+        allow create, update: if signedIn() && me() != uid && sharesCircle(uid)
+          && request.resource.data.keys().hasOnly(['by', 'owner', 'claimedAt'])
           && request.resource.data.by == me()
-          && request.resource.data.owner == uid;
-        allow update: if signedIn() && resource.data.by == me()
+          && request.resource.data.owner == uid
+          && (resource == null || resource.data.by == me());
+        allow delete: if signedIn() && resource.data.by == me();
+      }
+
+      // Who claimed it, their note, and whether it's bought: only for people who share a circle
+      // with the owner AND with the person who claimed it. Read one at a time, never listed.
+      match /claimDetails/{itemId} {
+        allow get: if signedIn() && me() != uid && sharesCircle(uid)
+          && (resource.data.by == me() || sharesCircle(resource.data.by));
+        allow list: if false;
+        allow create, update: if signedIn() && me() != uid
           && request.resource.data.by == me()
-          && request.resource.data.owner == uid;
+          && request.resource.data.owner == uid
+          && existsAfter(claimPath(uid, itemId))
+          && getAfter(claimPath(uid, itemId)).data.by == me();
         allow delete: if signedIn() && resource.data.by == me();
       }
     }
